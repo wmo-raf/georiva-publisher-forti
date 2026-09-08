@@ -174,7 +174,7 @@ def _interval(every: int, period: str) -> IntervalSchedule:
 
     Not ``get_or_create``: nothing constrains ``IntervalSchedule`` to be unique on
     ``(every, period)``, and a database that has accumulated duplicates — this dev
-    one holds three copies of "every 5 minutes" — makes ``get_or_create`` raise
+    one holds three copies of "every 1 hour" — makes ``get_or_create`` raise
     ``MultipleObjectsReturned`` rather than return one. Registration then fails in
     the handler's ``except`` and the periodic tasks simply never exist, which is a
     quiet way to lose every sweep this plugin has. Any of the duplicates will do.
