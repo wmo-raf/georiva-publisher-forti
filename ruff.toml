@@ -1,0 +1,13 @@
+# The same style contract core uses, restated here because core's ruff.toml
+# excludes dev-plugins — each plugin repo owns its own style, and this one is
+# written to core's.
+line-length = 120
+target-version = "py312"
+
+extend-exclude = ["**/migrations/**"]
+
+[lint]
+select = ["E", "W", "F", "I", "UP", "B"]
+
+[lint.isort]
+known-first-party = ["georiva", "georiva_publisher_forti"]

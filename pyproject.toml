@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "georiva-publisher-forti"
+version = "0.0.1"
+description = "Publishes a GeoRiva forecast collection as met.no Forti internal-format point data, served as locationforecast 2.0."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "WMO RAF" }]
+classifiers = []
+# `georiva` (the core) is deliberately not listed: it is provided by the runtime
+# environment — the GeoRiva image, or the uv workspace where core is a sibling
+# member of the same virtualenv. numpy and rasterio come from core too.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/wmo-raf/georiva-publisher-forti"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
