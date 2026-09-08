@@ -169,38 +169,39 @@ def prune_forti_publications(self) -> None:
         logger.info("prune_forti_publications: pruned %d expired build-log row(s)", expired)
 
 
+def _interval(every: int, period: str) -> IntervalSchedule:
+    """An interval schedule, reusing one if it exists.
+
+    Not ``get_or_create``: nothing constrains ``IntervalSchedule`` to be unique on
+    ``(every, period)``, and a database that has accumulated duplicates — this dev
+    one holds three copies of "every 5 minutes" — makes ``get_or_create`` raise
+    ``MultipleObjectsReturned`` rather than return one. Registration then fails in
+    the handler's ``except`` and the periodic tasks simply never exist, which is a
+    quiet way to lose every sweep this plugin has. Any of the duplicates will do.
+    """
+    existing = IntervalSchedule.objects.filter(every=every, period=period).first()
+    return existing or IntervalSchedule.objects.create(every=every, period=period)
+
+
 @app.on_after_finalize.connect
 def setup_forti_periodic_tasks(sender, **kwargs) -> None:
     """Register the sweep, the config refresh and the daily retention pass."""
-    try:
-        every_5_minutes, _ = IntervalSchedule.objects.get_or_create(every=5, period=IntervalSchedule.MINUTES)
-        PeriodicTask.objects.update_or_create(
-            name="georiva_publisher_forti.sweep_forti_publications",
-            defaults={
-                "task": "georiva_publisher_forti.tasks.sweep_forti_publications",
-                "interval": every_5_minutes,
-                "enabled": True,
-            },
-        )
+    schedules = [
+        ("sweep_forti_publications", 5, IntervalSchedule.MINUTES),
+        ("refresh_forti_jsonformat", 1, IntervalSchedule.HOURS),
+        ("prune_forti_publications", 1, IntervalSchedule.DAYS),
+    ]
 
-        hourly, _ = IntervalSchedule.objects.get_or_create(every=1, period=IntervalSchedule.HOURS)
-        PeriodicTask.objects.update_or_create(
-            name="georiva_publisher_forti.refresh_forti_jsonformat",
-            defaults={
-                "task": "georiva_publisher_forti.tasks.refresh_forti_jsonformat",
-                "interval": hourly,
-                "enabled": True,
-            },
-        )
-
-        daily, _ = IntervalSchedule.objects.get_or_create(every=1, period=IntervalSchedule.DAYS)
-        PeriodicTask.objects.update_or_create(
-            name="georiva_publisher_forti.prune_forti_publications",
-            defaults={
-                "task": "georiva_publisher_forti.tasks.prune_forti_publications",
-                "interval": daily,
-                "enabled": True,
-            },
-        )
-    except Exception as exc:
-        logger.warning("Could not register Forti publisher periodic tasks: %s", exc)
+    for name, every, period in schedules:
+        # One failing registration must not take the other two with it.
+        try:
+            PeriodicTask.objects.update_or_create(
+                name=f"georiva_publisher_forti.{name}",
+                defaults={
+                    "task": f"georiva_publisher_forti.tasks.{name}",
+                    "interval": _interval(every, period),
+                    "enabled": True,
+                },
+            )
+        except Exception as exc:
+            logger.warning("Could not register periodic task %s: %s", name, exc)
