@@ -32,7 +32,7 @@ class QueueRoutingTests(SimpleTestCase):
     def test_the_sweeps_run_on_the_default_queue(self):
         for task in (
             tasks.sweep_forti_publications,
-            tasks.refresh_forti_jsonformat,
+            tasks.refresh_forti_config,
             tasks.prune_forti_publications,
         ):
             with self.subTest(task=task.name):
@@ -44,7 +44,7 @@ class QueueRoutingTests(SimpleTestCase):
             for task in (
                 tasks.publish_forti_area,
                 tasks.sweep_forti_publications,
-                tasks.refresh_forti_jsonformat,
+                tasks.refresh_forti_config,
                 tasks.prune_forti_publications,
             )
         }
@@ -188,3 +188,91 @@ class RunSignalTests(TestCase):
         after = FortiPublication.objects.get(pk=publication.pk)
         self.assertEqual(after.status, FortiPublication.Status.BUILDING)
         self.assertEqual(after.locked_by, claim)
+
+
+class PeriodicRegistrationTests(TestCase):
+    """A beat row that names a task no worker has registered is a silent hole.
+
+    Celery logs ``Received unregistered task`` and rejects the message; nothing
+    else says anything, and the row goes on looking enabled and healthy.
+    """
+
+    def register(self):
+        from django_celery_beat.models import PeriodicTask
+
+        tasks.setup_forti_periodic_tasks(sender=None)
+        return set(PeriodicTask.objects.values_list("name", flat=True))
+
+    def test_every_declared_schedule_gets_a_row(self):
+        names = self.register()
+
+        for name, _, _ in tasks.SCHEDULES:
+            with self.subTest(name=name):
+                self.assertIn(f"{tasks.BEAT_PREFIX}{name}", names)
+
+    def test_the_reconciler_runs_at_the_sweep_s_cadence(self):
+        """Five minutes, aligned with the existing sweep (D22). An hour — which
+        is what the jsonformat refresh ran at — is an hour of an area published
+        and not advertised."""
+        from django_celery_beat.models import IntervalSchedule, PeriodicTask
+
+        self.register()
+
+        row = PeriodicTask.objects.get(name=f"{tasks.BEAT_PREFIX}refresh_forti_config")
+
+        self.assertEqual(row.interval.every, 5)
+        self.assertEqual(row.interval.period, IntervalSchedule.MINUTES)
+
+    def test_a_retired_task_of_this_plugin_loses_its_row(self):
+        """``refresh_forti_jsonformat`` is the live case: it exists right now in
+        the dev beat database, enabled and hourly, and after the rename it would
+        fire a name no worker has."""
+        from django_celery_beat.models import IntervalSchedule, PeriodicTask
+
+        PeriodicTask.objects.create(
+            name=f"{tasks.BEAT_PREFIX}refresh_forti_jsonformat",
+            task="georiva_publisher_forti.tasks.refresh_forti_jsonformat",
+            interval=IntervalSchedule.objects.create(every=1, period=IntervalSchedule.HOURS),
+        )
+
+        self.assertNotIn(f"{tasks.BEAT_PREFIX}refresh_forti_jsonformat", self.register())
+
+    def test_another_owner_s_rows_are_left_alone(self):
+        """A beat database is shared with core and every other plugin. A sweep by
+        any wider rule than this plugin's own name prefix is a plugin
+        unregistering somebody else's schedule."""
+        from django_celery_beat.models import IntervalSchedule, PeriodicTask
+
+        schedule = IntervalSchedule.objects.create(every=7, period=IntervalSchedule.MINUTES)
+        PeriodicTask.objects.create(name="georiva.core.sweep_something", task="x", interval=schedule)
+        PeriodicTask.objects.create(name="georiva_source_cds.fetch", task="y", interval=schedule)
+
+        names = self.register()
+
+        self.assertIn("georiva.core.sweep_something", names)
+        self.assertIn("georiva_source_cds.fetch", names)
+
+
+class ConfigReconcilerTests(TestCase):
+    def test_a_failing_refresh_does_not_take_the_task_down(self):
+        """It is the last line of defence for the serving plane; a raise here
+        would be a Celery failure nobody is watching, and the next tick is five
+        minutes away either way."""
+        with patch("georiva_publisher_forti.config.refresh", side_effect=RuntimeError("bucket gone")):
+            tasks.refresh_forti_config()
+
+    def test_the_reconciler_is_not_the_sweep_s_tail(self):
+        """The sweep can raise before reaching a tail, and this is what covers a
+        publish whose own inline refresh already failed. They are also different
+        jobs: one dispatches builds, the other describes what has been built."""
+        from .factories import make_collection, make_publication
+
+        make_publication(make_collection())
+
+        with (
+            patch("georiva_publisher_forti.config.refresh") as refresh,
+            patch.object(tasks.publish_forti_area, "delay"),
+        ):
+            tasks.sweep_forti_publications()
+
+        refresh.assert_not_called()

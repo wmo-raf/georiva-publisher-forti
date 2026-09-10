@@ -5,6 +5,12 @@ which time bucket and under what name. It is **instance-wide** (D20), because on
 ``jsonfrontend`` now fronts one prefix holding every organisation's areas — so it
 is the union over every enabled publication on the instance.
 
+It *watches* that config rather than reading it once — a ``configwatch.Watcher``
+polling every second, validating before applying and keeping the previous config
+when handed a bad one — so a rewrite needs no restart. Where the document lives,
+when it is written and the refusal to write an empty one all belong to
+:mod:`config`; this module builds it and does nothing else with it.
+
 A union is safe across tenants for the same reason it was already safe across
 areas: the name → bucket mapping is a static function of the parameter *name* and
 not of who published it, and jsonfrontend omits an empty duration bucket entirely
@@ -72,24 +78,3 @@ def build(publications) -> dict:
         "cut_forecast": True,
         "data_expiry_offset": DATA_EXPIRY_OFFSET,
     }
-
-
-def publish(publications) -> str | None:
-    """Write the instance's ``jsonformat.json``. Returns the key, or None.
-
-    Not a completion marker: nothing loads on its appearance, and jsonfrontend
-    reads it once at startup. It lives at the root of the prefix because it
-    describes the whole prefix rather than any one area.
-
-    One argument and no organisation, deliberately. There is exactly one of these
-    files now, so an org-at-a-time writer would have each organisation's refresh
-    overwrite the last one's parameters — and the loser would be a live tenant
-    whose consumers simply stop being offered a field.
-    """
-    publications = [publication for publication in publications if publication.is_enabled]
-    if not publications:
-        return None
-
-    from .models import instance_sink
-
-    return instance_sink().write_json("jsonformat.json", build(publications))

@@ -20,41 +20,25 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from django.conf import settings
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
-from georiva.core.publishing import MarkerOrderingError, PublicationSink
-from georiva.core.storage import Bucket, BucketType
+from georiva.core.publishing import MarkerOrderingError
 from georiva_publisher_forti import publisher
-from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_ROOT, FortiPublication
+from georiva_publisher_forti.models import FortiPublication
 from georiva_publisher_forti.publisher import GridMoved, publish
 
 from .factories import make_collection, make_publication, make_run, write_cogs
+from .sink_isolation import TemporarySinkMixin
 
 
-class PublishTestCase(TestCase):
+class PublishTestCase(TemporarySinkMixin, TestCase):
     def setUp(self):
         self.cogs = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.cogs, ignore_errors=True)
-        self.bucket_root = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.bucket_root, ignore_errors=True)
-
-        override = override_settings(
-            STORAGES={
-                **settings.STORAGES,
-                "georiva-publications": {
-                    "BACKEND": "django.core.files.storage.FileSystemStorage",
-                    "OPTIONS": {"location": self.bucket_root, "base_url": "/publications/"},
-                },
-            }
-        )
-        override.enable()
-        self.addCleanup(override.disable)
 
         # The one seam between this plugin and object storage.
-        self.bucket = Bucket(BucketType.PUBLICATIONS, "georiva-publications")
+        self.isolate_sink()
         self._patch_urls()
-        self._patch_sink()
 
         self.collection = make_collection()
         self.publication = make_publication(self.collection)
@@ -74,20 +58,6 @@ class PublishTestCase(TestCase):
         reader_module.asset_url = lambda href: str(cogs / href)
         self.addCleanup(setattr, reader_module, "asset_url", original_asset_url)
         self.addCleanup(setattr, publisher, "WindowReader", original)
-
-    def _patch_sink(self):
-        bucket = self.bucket
-
-        def sink(self_publication):
-            return PublicationSink.instance_wide(
-                SINK_ROOT,
-                marker_patterns=MARKER_PATTERNS,
-                bucket=bucket,
-            )
-
-        original = FortiPublication.sink
-        FortiPublication.sink = sink
-        self.addCleanup(setattr, FortiPublication, "sink", original)
 
     def sink(self):
         return self.publication.sink()
@@ -201,7 +171,9 @@ class EndToEndTests(PublishTestCase):
 class MarkerOrderingTests(PublishTestCase):
     def test_no_marker_exists_while_the_bytes_are_still_going_down(self):
         """The property M0 proved a reader depends on. Checked by looking at the
-        bucket at the moment the last ordinary object is written."""
+        bucket at the moment the last ordinary object is written.
+
+        """
         seen = {}
         sink = self.sink()
         original_write = type(sink).write
