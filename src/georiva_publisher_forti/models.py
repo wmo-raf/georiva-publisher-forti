@@ -6,12 +6,17 @@ wants and the worst possible shape for a point query: ~950 range reads and ~93 M
 across 14 API calls to answer "what is the weather at this coordinate". The same
 point out of Forti's layout is one read of about 2 KB.
 
-The unit of publication is an **area**, and an area is one collection. Several
-collections of one organisation coexist as several areas under the same
-``{org}/forti/`` prefix, which is what lets a coarse global model and a future
-finer national model be blended by nearest-gridpoint selection — and what makes
-cross-tenant resolution impossible, since a reader only ever sees one
-organisation's prefix.
+The unit of publication is an **area**, and an area is one collection. Every
+area on the instance lives under **one** prefix, because ``rawdataforecaster``
+now filters by area per request and reports which area answered: one process can
+hold every organisation's areas, and a prefix per organisation would have meant a
+process per organisation (D14/D15).
+
+So the prefix stops being the tenancy boundary. What is left of it here is the
+**area key** — ``{org}.{slug}``, one path segment, carrying the owning
+organisation in the name rather than in the path. Which tenant a request may be
+answered from is now a Django query and a check on every response, not a property
+of the storage layout; see ADR 0027's amendment in core.
 """
 
 from django.core.exceptions import ValidationError
@@ -19,16 +24,29 @@ from django.db import models
 
 from georiva.core.build_discipline import BuildAttemptLog, BuildDisciplinedModel
 
-#: The publication slug every Forti area of an organisation shares. The sink root
-#: is ``{org}/forti/`` and areas live inside it, because ``rawdataforecaster``
-#: takes one prefix and lists every area under it.
-SINK_SLUG = "forti"
+#: The one prefix every Forti publication on this instance writes into, and the
+#: whole of ``rawdataforecaster``'s ``?prefix=``. It cannot be shadowed by a
+#: tenant and cannot be inherited by one registered later: ``_`` is outside the
+#: organisation slug grammar, so no organisation can ever be called ``_forti``.
+SINK_ROOT = "_forti"
 
-#: Paths under that root whose appearance means "ready". ``latest/<area>`` is the
-#: load trigger — polled every 3 s (`forecast.go:126`) — and **not**
+#: Paths under that root whose appearance means "ready". ``latest/<area key>`` is
+#: the load trigger — polled every 3 s (`forecast.go:126`) — and **not**
 #: ``complete.json``, whatever the internalformat README says. Both are written by
 #: the engine, after the bytes, in that order.
 MARKER_PATTERNS = ("latest/*", "*/complete.json")
+
+
+def instance_sink():
+    """The sink every Forti publication on this instance shares.
+
+    One function rather than a construction at each call site, because the root
+    and the marker rule have to be the same everywhere: a second spelling of
+    either is a second grammar, and the reader only understands one.
+    """
+    from georiva.core.publishing import PublicationSink
+
+    return PublicationSink.instance_wide(SINK_ROOT, marker_patterns=MARKER_PATTERNS)
 
 
 class FortiPublication(BuildDisciplinedModel):
@@ -142,19 +160,40 @@ class FortiPublication(BuildDisciplinedModel):
     def bbox(self) -> tuple[float, float, float, float]:
         return (self.west, self.south, self.east, self.north)
 
-    def sink(self):
-        """This organisation's Forti prefix, with the marker rule attached."""
-        from georiva.core.publishing import PublicationSink
+    @property
+    def area_key(self) -> str:
+        """The name this area answers to — everywhere, and to everyone.
 
-        return PublicationSink(
-            self.organisation.slug,
-            SINK_SLUG,
-            marker_patterns=MARKER_PATTERNS,
-        )
+        ``{org}.{area}``, and it must stay **one path segment**. ``GetGridInfo``
+        (`forti-internalformat/client.go:150`) splits every key on ``/`` and
+        skips anything that is not exactly four parts, then reads the third as
+        the grid id. ``{org}/{area}/{version}/{grid}/`` is five, so a nested key
+        means every grid is skipped and the dataset loads with **no grids and no
+        error**. ``forti-internalformat`` is unforked and pinned at v1.0.0, so
+        the dot is the fix.
+
+        It is also what keeps an area from colliding with the documents beside
+        it under the shared root: every area key contains a ``.``, and
+        ``latest``, ``config`` and ``status`` do not.
+        """
+        return f"{self.organisation.slug}.{self.area}"
+
+    def sink(self):
+        """The instance-wide Forti prefix, with the marker rule attached.
+
+        Not this organisation's — every organisation publishes here. What is
+        this publication's is :attr:`area_key`, and every path derived below
+        starts with it.
+        """
+        return instance_sink()
 
     def version_prefix(self, version: int) -> str:
         """Where one version's bytes live, relative to the sink root."""
-        return f"{self.area}/{version}"
+        return f"{self.area_key}/{version}"
+
+    def marker_path(self) -> str:
+        """The pointer a reader polls for this area, relative to the sink root."""
+        return f"latest/{self.area_key}"
 
     # =========================================================================
     # Validation

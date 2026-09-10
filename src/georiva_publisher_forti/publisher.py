@@ -58,7 +58,7 @@ def publish(publication, facts: dict | None = None) -> dict:
     if publication.is_up_to_date(publish_plan.fingerprint):
         logger.info(
             "%s: run %s already published at version %d — nothing to do",
-            publication.area,
+            publication.area_key,
             publish_plan.reference_time,
             publish_plan.version,
         )
@@ -70,12 +70,12 @@ def publish(publication, facts: dict | None = None) -> dict:
     all_series = _derive(publish_plan, grid, cubes)
 
     sink = publication.sink()
-    staged = stage_version(sink, publication.area, publish_plan.version, grid, all_series)
+    staged = stage_version(sink, publication.area_key, publish_plan.version, grid, all_series)
     facts["objects_written"] = len(staged["objects"])
 
     # The markers, last, in order, and only once the bytes they promise exist.
     sink.publish_markers(
-        completion_markers(publication.area, publish_plan.version, publish_plan.time_until_next),
+        completion_markers(publication.area_key, publish_plan.version, publish_plan.time_until_next),
         require_staged=[staged["witness"]],
     )
 
@@ -94,7 +94,7 @@ def publish(publication, facts: dict | None = None) -> dict:
 
     logger.info(
         "%s: published version %d — %d point(s), %d step(s), %d parameter(s), %d old version(s) pruned",
-        publication.area,
+        publication.area_key,
         publish_plan.version,
         grid.point_count,
         publish_plan.step_count,
@@ -124,7 +124,7 @@ def _read(publication, publish_plan):
 
     if publication.grid_id and publication.grid_id != grid.identifier:
         raise GridMoved(
-            f"{publication.area}: the point list changed — pinned {publication.grid_id}, "
+            f"{publication.area_key}: the point list changed — pinned {publication.grid_id}, "
             f"now {grid.identifier} ({grid.point_count} points). Either the bbox was edited "
             f"or the source raster's geometry moved; both invalidate every stored ordinal."
         )
@@ -187,34 +187,43 @@ def _values_for(parameter, publish_plan, grid, cubes, windows) -> np.ndarray:
 def prune(publication, keep: int = VERSIONS_KEPT) -> int:
     """Drop all but the newest ``keep`` versions of this area.
 
-    Count-based rather than age-based, and the version ``latest/<area>`` names is
-    never a candidate however old it is — an area whose feed has stopped still has
-    a reader following its last good version.
+    Count-based rather than age-based, and the version ``latest/<area key>``
+    names is never a candidate however old it is — an area whose feed has
+    stopped still has a reader following its last good version.
 
-    A superseded version is deleted **whole**, its own ``complete.json`` included:
-    that file is a completion marker, and a version directory that cannot lose it
-    never goes away.
+    A superseded version is deleted **whole**, its own ``complete.json``
+    included: that file is a completion marker, and a version directory that
+    cannot lose it never goes away.
+
+    Every path below is derived from :attr:`area_key`, and that is the whole of
+    retention's tenancy safety now that the root is shared. Core refuses only
+    ``delete_prefix("")``; it cannot refuse ``delete_prefix("latest")`` or
+    ``("config")``, because which names under the root are areas is this
+    plugin's grammar and not core's. What makes those unreachable from here is
+    that an area key always contains a ``.`` and those names never do — so no
+    publication can name one, whatever it is called.
     """
     sink = publication.sink()
+    area_key = publication.area_key
 
     try:
-        current = int(sink.read_bytes(f"latest/{publication.area}").decode().strip())
+        current = int(sink.read_bytes(publication.marker_path()).decode().strip())
     except Exception:
         logger.warning(
-            "%s: cannot read latest/%s — skipping retention rather than guessing which version a reader is following",
-            publication.area,
-            publication.area,
+            "%s: cannot read %s — skipping retention rather than guessing which version a reader is following",
+            area_key,
+            publication.marker_path(),
         )
         return 0
 
     versions = sorted(
-        (int(name) for name in sink.children(publication.area) if name.isdigit()),
+        (int(name) for name in sink.children(area_key) if name.isdigit()),
         reverse=True,
     )
     doomed = [version for version in versions[keep:] if version != current]
 
     for version in doomed:
         sink.delete_prefix(publication.version_prefix(version), include_markers=True)
-        logger.info("%s: pruned version %d", publication.area, version)
+        logger.info("%s: pruned version %d", area_key, version)
 
     return len(doomed)

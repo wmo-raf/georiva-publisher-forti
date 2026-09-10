@@ -14,7 +14,8 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from georiva.core.models import Collection
-from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_SLUG, FortiPublication
+from georiva.core.publishing import PublicationSink
+from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_ROOT, FortiPublication
 
 from .factories import make_collection, make_publication
 
@@ -69,29 +70,76 @@ class ValidationTests(TestCase):
 
 
 class SinkTests(TestCase):
-    def test_every_area_of_one_organisation_shares_its_prefix(self):
-        """One rawdataforecaster per organisation, given one prefix, listing
-        every area under it."""
+    def test_two_organisations_publish_into_one_prefix(self):
+        """One rawdataforecaster for the instance, given one prefix, listing
+        every organisation's areas under it (D14/D15)."""
         first = make_publication(make_collection(slug="global"), area="global")
-        second = make_publication(make_collection(slug="national"), area="national")
-        second.collection.catalog.organisation = first.collection.catalog.organisation
-        second.collection.catalog.save()
+        second = make_publication(make_collection(org_slug="other-org"), area="national")
 
+        self.assertNotEqual(first.organisation, second.organisation)
         self.assertEqual(first.sink().root, second.sink().root)
-        self.assertTrue(first.sink().root.endswith(f"/{SINK_SLUG}/"))
+        self.assertEqual(first.sink().root, f"{SINK_ROOT}/")
 
-    def test_the_prefix_opens_with_the_owning_organisation(self):
+    def test_the_prefix_is_not_a_name_any_organisation_could_hold(self):
+        """The prefix is no longer the tenancy boundary, so what is left to
+        guarantee is that it cannot become some organisation's own."""
         publication = make_publication(make_collection())
 
-        self.assertTrue(publication.sink().root.startswith(f"{publication.organisation.slug}/"))
+        self.assertTrue(publication.sink().is_instance_wide)
+        with self.assertRaises(ValueError):
+            PublicationSink.instance_wide(SINK_ROOT.lstrip("_"))
 
     def test_the_sink_knows_which_paths_are_markers(self):
-        sink = make_publication(make_collection()).sink()
+        publication = make_publication(make_collection())
+        sink = publication.sink()
+        key = publication.area_key
 
         self.assertEqual(sink.marker_patterns, MARKER_PATTERNS)
-        self.assertTrue(sink.is_marker("latest/kenya"))
-        self.assertTrue(sink.is_marker("kenya/1/complete.json"))
-        self.assertFalse(sink.is_marker("kenya/1/grid/data"))
+        self.assertTrue(sink.is_marker(f"latest/{key}"))
+        self.assertTrue(sink.is_marker(f"{key}/1/complete.json"))
+        self.assertFalse(sink.is_marker(f"{key}/1/grid/data"))
+
+
+class AreaKeyTests(TestCase):
+    """``{org}.{area}``, and why the separator is a dot.
+
+    ``GetGridInfo`` (`forti-internalformat/client.go:150`) splits every key on
+    ``/`` and skips anything that is not exactly four parts. A key of
+    ``{org}/{area}/{version}/{grid}/latitude`` is five, so every grid would be
+    skipped and the dataset would load with no grids and no error at all.
+    """
+
+    def test_the_key_carries_the_organisation_in_one_segment(self):
+        publication = make_publication(make_collection(), area="ecmwf-ifs")
+
+        self.assertEqual(publication.area_key, f"{publication.organisation.slug}.ecmwf-ifs")
+        self.assertNotIn("/", publication.area_key)
+
+    def test_a_version_prefix_splits_into_exactly_what_the_reader_expects(self):
+        publication = make_publication(make_collection())
+
+        key = f"{publication.version_prefix(178891200015)}/deadbeef/latitude"
+
+        self.assertEqual(len(key.split("/")), 4)
+
+    def test_two_organisations_may_publish_the_same_area_name(self):
+        """Which is the point of carrying the organisation in the key: the name
+        is only unique per organisation, and the key is unique on the instance."""
+        first = make_publication(make_collection(), area="ecmwf-ifs")
+        second = make_publication(make_collection(org_slug="other-org"), area="ecmwf-ifs")
+
+        self.assertNotEqual(first.area_key, second.area_key)
+
+    def test_an_area_key_can_never_be_one_of_the_documents_beside_it(self):
+        """The whole of retention's tenancy safety under a shared root. Core
+        refuses ``delete_prefix("")`` and can refuse nothing else, because which
+        names under the root are areas is this plugin's grammar."""
+        publication = make_publication(make_collection(), area="latest")
+
+        self.assertIn(".", publication.area_key)
+        for reserved in ("latest", "config", "status", "jsonformat.json"):
+            with self.subTest(reserved=reserved):
+                self.assertNotEqual(publication.area_key, reserved)
 
 
 class ExtentSeedingTests(TestCase):

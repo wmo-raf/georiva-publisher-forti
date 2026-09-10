@@ -2,10 +2,10 @@
 
 The layout, from `forti-internalformat`::
 
-    {org}/forti/
-    ├── latest/<area>                 ← ENGINE writes this, last
+    _forti/
+    ├── latest/<org>.<area>           ← ENGINE writes this, last
     ├── jsonformat.json
-    └── <area>/<version>/
+    └── <org>.<area>/<version>/
         ├── complete.json             ← ENGINE writes this, second to last
         └── <md5(lat||lon)>/
             ├── latitude    float32[n_points]
@@ -110,15 +110,19 @@ def point_major(packed: list[np.ndarray], point_count: int) -> bytes:
     return block.astype("<i2").tobytes(order="C")
 
 
-def stage_version(sink, area: str, version: int, grid, all_series: list[Series]) -> dict:
+def stage_version(sink, area_key: str, version: int, grid, all_series: list[Series]) -> dict:
     """Write one version's bytes. Returns what the markers will need.
 
     Everything here is an ordinary object, so the sink accepts all of it. The two
-    markers — ``complete.json`` and ``latest/<area>`` — are built by
+    markers — ``complete.json`` and ``latest/<area key>`` — are built by
     ``completion_markers`` and written afterwards, by the engine.
+
+    ``area_key`` is the reader's whole name for this area, and it is one path
+    segment: the four-part split in `client.go:150` skips any key with a fifth,
+    silently. The caller derives it; nothing here may add a separator to it.
     """
     meta, packed = build_meta(all_series)
-    prefix = f"{area}/{version}/{grid.identifier}"
+    prefix = f"{area_key}/{version}/{grid.identifier}"
 
     written = [
         sink.write(f"{prefix}/latitude", grid.latitude.tobytes()),
@@ -129,7 +133,7 @@ def stage_version(sink, area: str, version: int, grid, all_series: list[Series])
 
     logger.info(
         "staged %s v%d: %d point(s), %d value(s) per point, %d object(s)",
-        area,
+        area_key,
         version,
         grid.point_count,
         meta["number_of_points"],
@@ -144,20 +148,23 @@ def stage_version(sink, area: str, version: int, grid, all_series: list[Series])
     }
 
 
-def completion_markers(area: str, version: int, time_until_next=None) -> list[CompletionMarker]:
+def completion_markers(area_key: str, version: int, time_until_next=None) -> list[CompletionMarker]:
     """The two markers, in the order they must be written.
 
-    ``complete.json`` first: it is the manifest ``latest/<area>`` points at, and a
-    reader that finds the pointer follows it immediately. ``latest/<area>`` second:
-    it is the actual load trigger, polled every 3 s (`forecast.go:126`) — not
-    ``complete.json``, whatever the internalformat README says.
+    ``complete.json`` first: it is the manifest ``latest/<area key>`` points at,
+    and a reader that finds the pointer follows it immediately.
+    ``latest/<area key>`` second: it is the actual load trigger, polled every 3 s
+    (`forecast.go:126`) — not ``complete.json``, whatever the internalformat
+    README says.
 
     ``geographic_extent`` is null on purpose. A non-null one is what the GEOS
     polygon leak needs, and coverage is bounded by ``maximum_gridpoint_distance``
     instead.
     """
     complete = {
-        "area": area,
+        # The key, not the publication's own name: this is what the reader was
+        # configured with and what it asks for.
+        "area": area_key,
         "version": version,
         "geographic_extent": None,
     }
@@ -167,10 +174,10 @@ def completion_markers(area: str, version: int, time_until_next=None) -> list[Co
 
     return [
         CompletionMarker(
-            f"{area}/{version}/complete.json",
+            f"{area_key}/{version}/complete.json",
             json.dumps(complete, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
         ),
-        CompletionMarker(f"latest/{area}", str(version).encode("utf-8")),
+        CompletionMarker(f"latest/{area_key}", str(version).encode("utf-8")),
     ]
 
 
