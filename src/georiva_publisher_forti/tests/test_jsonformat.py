@@ -91,8 +91,8 @@ class UnionTests(TestCase):
         (D20), so there is one document and it is their union. Safe because the
         name → bucket mapping is a function of the parameter name and not of who
         published it."""
-        coarse = make_publication(make_collection(slug="global"), area="global")
-        fine = make_publication(make_collection(org_slug="other-org"), area="national")
+        coarse = make_publication(make_collection(slug="global"), slug="global")
+        fine = make_publication(make_collection(org_slug="other-org"), slug="national")
 
         self.assertNotEqual(coarse.organisation, fine.organisation)
         coarse.published_parameters = ["air_temperature_2m"]

@@ -17,6 +17,12 @@ So the prefix stops being the tenancy boundary. What is left of it here is the
 organisation in the name rather than in the path. Which tenant a request may be
 answered from is now a Django query and a check on every response, not a property
 of the storage layout; see ADR 0027's amendment in core.
+
+That also moves what the name *means*. An area used to describe a **window** —
+the live row is called ``kenya`` — and now it names a **model**: ``ecmwf-ifs``,
+with Kenya implied by the bbox. One request names exactly one area and no two are
+ever blended (D16), so what a consumer picks between is the model, and
+``FortiPublication.slug`` is the name it picks by (D17).
 """
 
 from django.core.exceptions import ValidationError
@@ -35,6 +41,20 @@ SINK_ROOT = "_forti"
 #: ``complete.json``, whatever the internalformat README says. Both are written by
 #: the engine, after the bytes, in that order.
 MARKER_PATTERNS = ("latest/*", "*/complete.json")
+
+
+#: How open each tier is. ``internal`` is here because a *collection* can be it,
+#: not because a publication can: the choices offer two tiers, so refusing the
+#: third is a matter of never having offered it.
+_OPENNESS = {"public": 2, "private": 1, "internal": 0, "": 0}
+
+_RENAME_REFUSED = (
+    "This model has published as {stored!r} and cannot be renamed to {wanted!r}. "
+    "The slug is a segment of every key already on the bucket: the rename would "
+    "leave latest/<org>.{stored} pointing at bytes no retention pass looks at any "
+    "more, while readers keep serving the old name and the new one has nothing "
+    "under it until the next run. Create a second publication instead."
+)
 
 
 def instance_sink():
@@ -63,15 +83,38 @@ class FortiPublication(BuildDisciplinedModel):
         "georivacore.Collection",
         on_delete=models.CASCADE,
         related_name="forti_publication",
-        help_text="The forecast collection this area publishes. Must be public.",
+        help_text=(
+            "The forecast collection this model publishes. An internal collection "
+            "is refused: it is a derivation intermediate, not a dataset."
+        ),
     )
 
-    area = models.SlugField(
+    slug = models.SlugField(
         max_length=50,
+        blank=True,
         help_text=(
-            "The area name readers ask for, unique within the organisation. It is "
-            "the filename under latest/ and a directory under the prefix, so "
-            "changing it strands the old one."
+            "The model name a consumer asks for: GET /api/forecast/{slug}/. "
+            "Unique within the organisation, in the same grammar as the catalog "
+            "slug it is prefilled from — leave it blank to take that. Immutable "
+            "once published: it is a segment of every storage key."
+        ),
+    )
+
+    class Visibility(models.TextChoices):
+        PUBLIC = "public", "Public"
+        PRIVATE = "private", "Private"
+
+    visibility = models.CharField(
+        max_length=10,
+        choices=Visibility.choices,
+        blank=True,
+        default="",
+        help_text=(
+            "Who may ask for this model. Blank takes the collection's, which is "
+            "the usual answer; it may be narrowed from there but never widened "
+            "past it. A caller who may not see a model finds it absent from the "
+            "listing and 404s on it directly, so the endpoint cannot be used to "
+            "enumerate what a tenant publishes."
         ),
     )
 
@@ -114,7 +157,7 @@ class FortiPublication(BuildDisciplinedModel):
         null=True,
         blank=True,
         editable=False,
-        help_text="ref_epoch_seconds * 100 + revision — the integer latest/<area> holds.",
+        help_text="ref_epoch_seconds * 100 + revision — the integer latest/<area key> holds.",
     )
     published_reference_time = models.DateTimeField(null=True, blank=True, editable=False)
     published_step_count = models.PositiveIntegerField(default=0, editable=False)
@@ -146,7 +189,7 @@ class FortiPublication(BuildDisciplinedModel):
         ]
 
     def __str__(self):
-        return f"{self.area} ← {self.collection.slug} [{self.status}]"
+        return f"{self.slug} ← {self.collection.slug} [{self.status}]"
 
     # =========================================================================
     # Identity
@@ -164,10 +207,10 @@ class FortiPublication(BuildDisciplinedModel):
     def area_key(self) -> str:
         """The name this area answers to — everywhere, and to everyone.
 
-        ``{org}.{area}``, and it must stay **one path segment**. ``GetGridInfo``
+        ``{org}.{slug}``, and it must stay **one path segment**. ``GetGridInfo``
         (`forti-internalformat/client.go:150`) splits every key on ``/`` and
         skips anything that is not exactly four parts, then reads the third as
-        the grid id. ``{org}/{area}/{version}/{grid}/`` is five, so a nested key
+        the grid id. ``{org}/{slug}/{version}/{grid}/`` is five, so a nested key
         means every grid is skipped and the dataset loads with **no grids and no
         error**. ``forti-internalformat`` is unforked and pinned at v1.0.0, so
         the dot is the fix.
@@ -176,7 +219,7 @@ class FortiPublication(BuildDisciplinedModel):
         it under the shared root: every area key contains a ``.``, and
         ``latest``, ``config`` and ``status`` do not.
         """
-        return f"{self.organisation.slug}.{self.area}"
+        return f"{self.organisation.slug}.{self.slug}"
 
     def sink(self):
         """The instance-wide Forti prefix, with the marker rule attached.
@@ -201,22 +244,36 @@ class FortiPublication(BuildDisciplinedModel):
 
     def clean(self):
         super().clean()
+        self.inherit_from_collection()
         errors = {}
 
         if self.collection_id:
             collection = self.collection
-            if collection.visibility != collection.Visibility.PUBLIC:
+            if collection.visibility == collection.Visibility.INTERNAL:
                 errors["collection"] = (
-                    "Only public collections may be published. A Forti reader holds no "
-                    "credential and cannot be asked who it is, so there is nobody to "
-                    "check a private collection against."
+                    "An internal collection cannot be published. It is a derivation "
+                    "intermediate read by the engine as an input — not a dataset with "
+                    "a small audience, and there is no audience to narrow it to."
                 )
-            if self.area and self._area_taken(collection):
-                errors["area"] = (
-                    f"Another publication of this organisation already uses the area "
-                    f"name {self.area!r}. Area names are the reader's whole vocabulary: "
-                    f"two areas with one name means one of them is unreachable."
+            elif _OPENNESS[self.visibility] > _OPENNESS[collection.visibility]:
+                errors["visibility"] = (
+                    f"A {self.get_visibility_display().lower()} model over a "
+                    f"{collection.get_visibility_display().lower()} collection would serve "
+                    f"through Forti what the collection is not served through anywhere "
+                    f"else. Visibility may be narrowed from the collection's, never widened."
                 )
+
+            if self.slug and self._slug_taken(collection):
+                errors["slug"] = (
+                    f"Another publication of this organisation is already the model "
+                    f"{self.slug!r}. The slug is the name a consumer asks by and a "
+                    f"segment of every storage key: two models with one name means one "
+                    f"of them is unreachable."
+                )
+
+        renamed = self._published_under_another_slug()
+        if renamed is not None:
+            errors["slug"] = _RENAME_REFUSED.format(stored=renamed, wanted=self.slug)
 
         if self.west is not None and self.east is not None and self.west >= self.east:
             errors["east"] = "The eastern edge must be east of the western one."
@@ -226,16 +283,81 @@ class FortiPublication(BuildDisciplinedModel):
         if errors:
             raise ValidationError(errors)
 
-    def _area_taken(self, collection) -> bool:
+    def save(self, *args, **kwargs):
+        """Enforced here as well as in ``clean()``, for the two that are not
+        validation niceties.
+
+        A slug change after a publish is a storage fact, exactly as
+        ``Organisation.slug`` is: keys already carry the old one. And a blank
+        visibility is a *form* state, never a stored one — a row that reached the
+        database without a tier would be missing from every serving query, which
+        reads as "no such model" rather than as anything having gone wrong. Code
+        paths that skip ``full_clean()`` must not be able to produce either.
+        """
+        self.inherit_from_collection()
+
+        renamed = self._published_under_another_slug()
+        if renamed is not None:
+            raise ValidationError(
+                {"slug": _RENAME_REFUSED.format(stored=renamed, wanted=self.slug)},
+                code="immutable_published_slug",
+            )
+        return super().save(*args, **kwargs)
+
+    def inherit_from_collection(self) -> None:
+        """Fill what the collection decides, where nothing else has decided it.
+
+        The slug is prefilled from ``catalog.slug`` because that is already the
+        right name and the right scope: ``Catalog``'s own docstring calls it *"a
+        data source that produces multiple collections. Examples: GFS, CHIRPS,
+        ERA5, MSG"*, and its slug is unique per organisation, which is exactly
+        what a public model name needs to be.
+
+        Visibility defaults from the collection because deriving it is right
+        almost always, and the field exists for the case it is not: an NMHS may
+        reasonably serve maps publicly and point forecasts to members only, which
+        deriving cannot express in either direction.
+        """
+        if (self.slug and self.visibility) or not self.collection_id:
+            return
+
+        collection = self.collection
+        if not self.slug:
+            self.slug = collection.catalog.slug
+        if not self.visibility:
+            # An internal collection lands here as an unspellable tier. That is
+            # the safe direction — no serving query matches it — and ``clean()``
+            # refuses the collection outright.
+            self.visibility = collection.visibility
+
+    def _slug_taken(self, collection) -> bool:
         return (
             type(self)
             .objects.filter(
-                area=self.area,
+                slug=self.slug,
                 collection__catalog__organisation=collection.catalog.organisation_id,
             )
             .exclude(pk=self.pk)
             .exists()
         )
+
+    def _published_under_another_slug(self) -> str | None:
+        """The stored slug, if this row has published and is being renamed.
+
+        Read from the database rather than from ``__init__``'s copy: the build
+        discipline writes every transition with a queryset ``update()``, so an
+        in-memory instance's idea of ``published_version`` is routinely stale by
+        exactly the transition that matters.
+        """
+        if not self.pk:
+            return None
+
+        stored = type(self).objects.filter(pk=self.pk).values("slug", "published_version").first()
+        if stored is None or stored["published_version"] is None:
+            return None
+        if stored["slug"] == self.slug:
+            return None
+        return stored["slug"]
 
     def seed_extent_from_catalog(self, margin_degrees: float = 0.5) -> bool:
         """Fill the extent from the catalog's clipping boundary, plus a margin.

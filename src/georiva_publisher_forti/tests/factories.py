@@ -133,11 +133,11 @@ def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFE
     return hrefs
 
 
-def make_publication(collection, area="kenya", bbox=BBOX, **kwargs):
+def make_publication(collection, slug="kenya", bbox=BBOX, **kwargs):
     west, south, east, north = bbox
     return FortiPublication.objects.create(
         collection=collection,
-        area=area,
+        slug=slug,
         west=west,
         south=south,
         east=east,

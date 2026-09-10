@@ -1,13 +1,23 @@
-"""What a publication refuses to be.
+"""What a publication refuses to be, and what it takes from its collection.
 
-Two of these are the whole of D12 and the area half of D3, and both would fail
-silently rather than loudly. A private collection published to Forti is served to
-anyone who can reach the reader, because the reader presents no credential and
-there is nobody to ask. Two areas sharing a name means one of them is
-unreachable — and a *missing* ``latest/<area>`` reads as version **0**, so
-``rawdataforecaster`` goes looking for ``<area>/0/complete.json``, which is fatal
-at startup and merely logged afterwards, in an error that does not mention the
-area name at all (`forecast.go:143`).
+Every one of these fails silently rather than loudly if it is not checked here.
+
+Two models of one organisation sharing a slug means one of them is unreachable —
+and a *missing* ``latest/<area key>`` reads as version **0** to an unfixed
+reader, so ``rawdataforecaster`` goes looking for ``<area key>/0/complete.json``,
+which is fatal at startup and merely logged afterwards, in an error that does not
+mention the area at all (`forecast.go:143`).
+
+Renaming a published model is the same failure a step later: the keys already on
+the bucket carry the old slug, so the pointer nothing prunes goes on being served
+under the old name while the new one has nothing under it.
+
+Visibility replaces D12's flat refusal of anything but a public collection (D18).
+That rule's reason was about the *reader* — it holds no credential, so there is
+nobody to check a private collection against — and the gate is now the Django
+view, which does know who is asking. What is left to enforce is that a
+publication is never more open than the collection under it, because Forti would
+then serve what nothing else on the instance serves.
 """
 
 from django.core.exceptions import ValidationError
@@ -26,8 +36,20 @@ class ValidationTests(TestCase):
 
         publication.full_clean()
 
-    def test_a_private_collection_is_refused(self):
+    def test_a_private_collection_is_publishable_privately(self):
+        """D12 refused this outright. The reason was the reader's — it holds no
+        credential — and the gate is now the view, which knows who is asking."""
         collection = make_collection(visibility=Collection.Visibility.PRIVATE)
+        publication = make_publication(collection)
+
+        publication.full_clean()
+
+        self.assertEqual(publication.visibility, FortiPublication.Visibility.PRIVATE)
+
+    def test_an_internal_collection_is_refused(self):
+        """Not a dataset with a small audience — a derivation intermediate, with
+        no audience to narrow to."""
+        collection = make_collection(visibility=Collection.Visibility.INTERNAL)
         publication = make_publication(collection)
 
         with self.assertRaises(ValidationError) as ctx:
@@ -35,18 +57,11 @@ class ValidationTests(TestCase):
 
         self.assertIn("collection", ctx.exception.message_dict)
 
-    def test_an_internal_collection_is_refused(self):
-        collection = make_collection(visibility=Collection.Visibility.INTERNAL)
-        publication = make_publication(collection)
-
-        with self.assertRaises(ValidationError):
-            publication.full_clean()
-
-    def test_two_areas_of_one_organisation_may_not_share_a_name(self):
-        first = make_publication(make_collection(slug="global"), area="kenya")
+    def test_two_models_of_one_organisation_may_not_share_a_slug(self):
+        first = make_publication(make_collection(slug="global"), slug="kenya")
         second = FortiPublication(
             collection=make_collection(slug="national"),
-            area="kenya",
+            slug="kenya",
             west=1,
             south=1,
             east=2,
@@ -58,7 +73,7 @@ class ValidationTests(TestCase):
         with self.assertRaises(ValidationError) as ctx:
             second.full_clean()
 
-        self.assertIn("area", ctx.exception.message_dict)
+        self.assertIn("slug", ctx.exception.message_dict)
 
     def test_a_backwards_extent_is_refused(self):
         publication = make_publication(make_collection(), bbox=(42.0, -5.0, 33.0, 6.0))
@@ -69,12 +84,116 @@ class ValidationTests(TestCase):
         self.assertIn("east", ctx.exception.message_dict)
 
 
+class SlugTests(TestCase):
+    """The name a consumer asks by, and a segment of every storage key."""
+
+    def test_a_blank_slug_takes_the_catalogs(self):
+        """``Catalog``'s docstring is "a data source that produces multiple
+        collections. Examples: GFS, CHIRPS, ERA5, MSG" — which is a model, and
+        its slug is already unique per organisation (D17)."""
+        collection = make_collection()
+        publication = make_publication(collection, slug="")
+
+        publication.full_clean()
+
+        self.assertEqual(publication.slug, collection.catalog.slug)
+
+    def test_a_blank_slug_is_filled_even_without_validation(self):
+        """``objects.create`` skips ``full_clean``, and a nameless publication
+        would publish under ``{org}.`` — a key nothing asks for."""
+        collection = make_collection()
+
+        publication = make_publication(collection, slug="")
+
+        self.assertEqual(publication.slug, collection.catalog.slug)
+
+    def test_an_unpublished_model_may_still_be_renamed(self):
+        """Nothing carries the name yet, so nothing is stranded by changing it."""
+        publication = make_publication(make_collection(), slug="kenya")
+
+        publication.slug = "ecmwf-ifs"
+        publication.full_clean()
+        publication.save()
+
+        self.assertEqual(FortiPublication.objects.get(pk=publication.pk).slug, "ecmwf-ifs")
+
+    def test_a_published_model_may_not_be_renamed(self):
+        publication = make_publication(make_collection(), slug="kenya", published_version=178891200000)
+
+        publication.slug = "ecmwf-ifs"
+
+        with self.assertRaises(ValidationError) as ctx:
+            publication.full_clean()
+
+        self.assertIn("slug", ctx.exception.message_dict)
+
+    def test_the_rename_is_refused_without_validation_too(self):
+        """The same rule and the same reason as ``Organisation.slug``: a rename
+        is a storage fact, not a validation nicety, so a path that skips
+        ``full_clean()`` must not be able to sneak one through."""
+        publication = make_publication(make_collection(), slug="kenya", published_version=178891200000)
+
+        publication.slug = "ecmwf-ifs"
+
+        with self.assertRaises(ValidationError):
+            publication.save(update_fields=["slug"])
+
+    def test_publishing_reads_the_row_rather_than_the_instance_in_hand(self):
+        """Every build transition is a queryset ``update()``, so an in-memory
+        publication's ``published_version`` is stale by exactly the transition
+        that makes the slug immutable."""
+        publication = make_publication(make_collection(), slug="kenya")
+        FortiPublication.objects.filter(pk=publication.pk).update(published_version=178891200000)
+
+        self.assertIsNone(publication.published_version)
+        publication.slug = "ecmwf-ifs"
+
+        with self.assertRaises(ValidationError):
+            publication.full_clean()
+
+
+class VisibilityTests(TestCase):
+    """D18: defaulting from the collection, never more open than it."""
+
+    def test_it_defaults_to_the_collections(self):
+        publication = make_publication(make_collection())
+
+        self.assertEqual(publication.visibility, FortiPublication.Visibility.PUBLIC)
+
+    def test_a_public_collection_may_be_published_privately(self):
+        """Why the field exists at all: an NMHS may reasonably serve maps
+        publicly and point forecasts to members only, which deriving the tier
+        from the collection cannot express."""
+        publication = make_publication(
+            make_collection(),
+            visibility=FortiPublication.Visibility.PRIVATE,
+        )
+
+        publication.full_clean()
+
+        self.assertEqual(publication.visibility, FortiPublication.Visibility.PRIVATE)
+
+    def test_a_private_collection_may_not_be_published_publicly(self):
+        collection = make_collection(visibility=Collection.Visibility.PRIVATE)
+        publication = make_publication(collection, visibility=FortiPublication.Visibility.PUBLIC)
+
+        with self.assertRaises(ValidationError) as ctx:
+            publication.full_clean()
+
+        self.assertIn("visibility", ctx.exception.message_dict)
+
+    def test_internal_is_not_a_tier_a_publication_can_hold(self):
+        """Refused by never having been offered, which is stronger than a check:
+        there is no form and no admin through which it can be chosen."""
+        self.assertNotIn("internal", FortiPublication.Visibility.values)
+
+
 class SinkTests(TestCase):
     def test_two_organisations_publish_into_one_prefix(self):
         """One rawdataforecaster for the instance, given one prefix, listing
         every organisation's areas under it (D14/D15)."""
-        first = make_publication(make_collection(slug="global"), area="global")
-        second = make_publication(make_collection(org_slug="other-org"), area="national")
+        first = make_publication(make_collection(slug="global"), slug="global")
+        second = make_publication(make_collection(org_slug="other-org"), slug="national")
 
         self.assertNotEqual(first.organisation, second.organisation)
         self.assertEqual(first.sink().root, second.sink().root)
@@ -110,7 +229,7 @@ class AreaKeyTests(TestCase):
     """
 
     def test_the_key_carries_the_organisation_in_one_segment(self):
-        publication = make_publication(make_collection(), area="ecmwf-ifs")
+        publication = make_publication(make_collection(), slug="ecmwf-ifs")
 
         self.assertEqual(publication.area_key, f"{publication.organisation.slug}.ecmwf-ifs")
         self.assertNotIn("/", publication.area_key)
@@ -125,8 +244,8 @@ class AreaKeyTests(TestCase):
     def test_two_organisations_may_publish_the_same_area_name(self):
         """Which is the point of carrying the organisation in the key: the name
         is only unique per organisation, and the key is unique on the instance."""
-        first = make_publication(make_collection(), area="ecmwf-ifs")
-        second = make_publication(make_collection(org_slug="other-org"), area="ecmwf-ifs")
+        first = make_publication(make_collection(), slug="ecmwf-ifs")
+        second = make_publication(make_collection(org_slug="other-org"), slug="ecmwf-ifs")
 
         self.assertNotEqual(first.area_key, second.area_key)
 
@@ -134,7 +253,7 @@ class AreaKeyTests(TestCase):
         """The whole of retention's tenancy safety under a shared root. Core
         refuses ``delete_prefix("")`` and can refuse nothing else, because which
         names under the root are areas is this plugin's grammar."""
-        publication = make_publication(make_collection(), area="latest")
+        publication = make_publication(make_collection(), slug="latest")
 
         self.assertIn(".", publication.area_key)
         for reserved in ("latest", "config", "status", "jsonformat.json"):
