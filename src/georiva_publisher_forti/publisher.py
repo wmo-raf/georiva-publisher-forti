@@ -8,7 +8,9 @@ the marker withheld drew no load attempt at all, and the load began within two
 seconds of the marker appearing.
 
 Retention runs *after* the markers, never before. A version is only superseded
-once ``latest/<area>`` says so.
+once ``latest/<area>`` says so. The serving config runs after both, and after
+``mark_ready`` — it advertises what the markers made real, and it reads the field
+only ``mark_ready`` writes.
 """
 
 import logging
@@ -92,6 +94,18 @@ def publish(publication, facts: dict | None = None) -> dict:
         published_parameters=[parameter.name for parameter in publish_plan.parameters],
     )
 
+    # The config, last, and inline. It advertises this area and its parameters,
+    # so it must follow the markers — but "after the markers" is not enough: it
+    # has to follow ``mark_ready``, because ``rdfconfig.servable`` reads
+    # ``published_version`` and only ``mark_ready`` sets it. A refresh landing
+    # between the two writes an area list that omits the very run that triggered
+    # it, and nothing anywhere reports that.
+    #
+    # Inline rather than queued for exactly that reason: here the ordering is a
+    # property of this function, and a queued refresh would make it a property of
+    # when a worker happened to pick the message up.
+    _refresh_config(publication)
+
     logger.info(
         "%s: published version %d — %d point(s), %d step(s), %d parameter(s), %d old version(s) pruned",
         publication.area_key,
@@ -109,6 +123,34 @@ def publish(publication, facts: dict | None = None) -> dict:
         "steps": publish_plan.step_count,
         "pruned": pruned,
     }
+
+
+def _refresh_config(publication) -> None:
+    """Reconcile the serving configs, without letting them fail a good publish.
+
+    The bytes are on the bucket and ``latest/<area key>`` points at them: the
+    publish succeeded whatever happens here, and marking it FAILED would send the
+    sweep to redo work that is already done. A config that did not get written is
+    a *serving* fault, and the five-minute reconciler is what it is for — so this
+    is logged loudly and swallowed.
+
+    It re-reads the publications rather than using the one in hand. The build
+    discipline writes every transition with a queryset ``update()``, so this
+    instance's ``published_version`` is stale by exactly the ``mark_ready`` that
+    just ran — the transition the config is here to describe.
+    """
+    from . import config
+
+    try:
+        written = config.refresh()
+    except Exception:
+        logger.exception(
+            "%s: published, but the serving config was not refreshed — the reconciler will retry",
+            publication.area_key,
+        )
+    else:
+        if written:
+            logger.info("%s: refreshed %s", publication.area_key, ", ".join(written))
 
 
 def _read(publication, publish_plan):

@@ -18,12 +18,13 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from django.test import TestCase
 
 from georiva.core.publishing import MarkerOrderingError
-from georiva_publisher_forti import publisher
+from georiva_publisher_forti import config, publisher
 from georiva_publisher_forti.models import FortiPublication
 from georiva_publisher_forti.publisher import GridMoved, publish
 
@@ -173,6 +174,11 @@ class MarkerOrderingTests(PublishTestCase):
         """The property M0 proved a reader depends on. Checked by looking at the
         bucket at the moment the last ordinary object is written.
 
+        The *staged* objects, which is every write under the area key. The config
+        documents are written through the same door and deliberately after the
+        marker — they advertise what the marker made real — so they are not
+        counted here; ``ConfigOrderingTests`` is where their ordering is checked,
+        from the other side.
         """
         seen = {}
         sink = self.sink()
@@ -180,7 +186,8 @@ class MarkerOrderingTests(PublishTestCase):
 
         def watched_write(self_sink, relpath, content):
             key = original_write(self_sink, relpath, content)
-            seen[relpath] = self_sink.exists(f"latest/{self.area_key}")
+            if relpath.startswith(f"{self.area_key}/"):
+                seen[relpath] = self_sink.exists(f"latest/{self.area_key}")
             return key
 
         type(sink).write = watched_write
@@ -306,3 +313,51 @@ class RetentionTests(PublishTestCase):
 
         self.assertEqual(current, versions[-1])
         self.assertTrue(sink.exists(f"{self.area_key}/{current}/complete.json"))
+
+
+class ConfigOrderingTests(PublishTestCase):
+    """The config is written last, and "last" has two halves.
+
+    After the markers, because it advertises bytes and a listing that runs ahead
+    of them is a load failure. And after ``mark_ready``, because
+    ``rdfconfig.servable`` reads ``published_version`` and only ``mark_ready``
+    sets it — a refresh landing between the marker and that write produces an
+    area list that omits the very run that triggered it, with nothing anywhere
+    reporting it.
+    """
+
+    def test_a_publish_leaves_the_area_in_the_config_it_wrote(self):
+        publish(self.publication)
+
+        areas = json.loads(self.sink().read_bytes(config.RAWDATAFORECASTER_PATH).decode("utf-8"))["areas"]
+
+        self.assertEqual(areas, [self.area_key])
+
+    def test_the_refresh_sees_the_marker_and_the_ready_row_already_written(self):
+        seen = {}
+
+        def record():
+            sink = self.sink()
+            seen["marker"] = sink.exists(self.publication.marker_path())
+            seen["published_version"] = self.reread().published_version
+            return []
+
+        with patch("georiva_publisher_forti.config.refresh", side_effect=record):
+            publish(self.publication)
+
+        self.assertTrue(seen["marker"], "the config was refreshed before the marker it advertises")
+        self.assertIsNotNone(
+            seen["published_version"],
+            "the config was refreshed before mark_ready, so servable() would have omitted this run",
+        )
+
+    def test_a_config_that_cannot_be_written_does_not_fail_a_good_publish(self):
+        """The bytes are on the bucket and latest/<area key> points at them.
+        Marking this FAILED would send the sweep to redo work that is done; the
+        five-minute reconciler is what an unwritten config is for.
+        """
+        with patch("georiva_publisher_forti.config.refresh", side_effect=RuntimeError("bucket gone")):
+            result = publish(self.publication)
+
+        self.assertFalse(result["skipped"])
+        self.assertEqual(self.reread().status, FortiPublication.Status.READY)
