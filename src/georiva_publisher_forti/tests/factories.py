@@ -14,7 +14,7 @@ from rasterio.transform import from_origin
 
 from georiva.core.models import Asset, Catalog, Collection, Item, Unit, Variable
 from georiva.ingestion.models import RunIngestion
-from georiva.organisations.testing import make_organisation
+from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, make_organisation
 from georiva_publisher_forti.models import FortiPublication
 
 REFERENCE_TIME = datetime(2026, 9, 2, 12, tzinfo=UTC)
@@ -51,8 +51,15 @@ CONSTANTS = {
 }
 
 
-def make_collection(slug="ifs-surface", visibility=None):
-    organisation = make_organisation()
+def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG):
+    """One organisation's collection, with the variables the publisher reads.
+
+    ``org_slug`` is how a test asks for a *second* organisation. It matters now
+    that every area shares one prefix: the tenancy questions — two organisations
+    publishing the same area name, a prune that must not reach past its own key —
+    cannot be asked with only one organisation in the database.
+    """
+    organisation = make_organisation(org_slug)
     catalog = Catalog.objects.create(
         organisation=organisation,
         name="ECMWF IFS",
@@ -126,11 +133,11 @@ def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFE
     return hrefs
 
 
-def make_publication(collection, area="kenya", bbox=BBOX, **kwargs):
+def make_publication(collection, slug="kenya", bbox=BBOX, **kwargs):
     west, south, east, north = bbox
     return FortiPublication.objects.create(
         collection=collection,
-        area=area,
+        slug=slug,
         west=west,
         south=south,
         east=east,

@@ -26,6 +26,11 @@ from georiva_publisher_forti.writer import (
 )
 
 BASE = datetime(2026, 9, 2, 12, tzinfo=UTC)
+
+#: What the writer is handed: ``{org}.{area}``, one path segment. Spelled out
+#: here rather than derived, because the shape is the thing under test.
+AREA_KEY = "central.kenya"
+
 TEMPERATURE = params.BY_NAME["air_temperature_2m"]
 SYMBOL = params.BY_NAME["weather_symbol_6h"]
 
@@ -144,32 +149,39 @@ class DataLayoutTests(SimpleTestCase):
 
 class CompletionMarkerTests(SimpleTestCase):
     def test_the_manifest_comes_before_the_pointer_that_names_it(self):
-        markers = completion_markers("kenya", 178835040000)
+        markers = completion_markers(AREA_KEY, 178835040000)
 
         self.assertEqual(
             [marker.path for marker in markers],
-            ["kenya/178835040000/complete.json", "latest/kenya"],
+            [f"{AREA_KEY}/178835040000/complete.json", f"latest/{AREA_KEY}"],
         )
 
+    def test_the_manifest_names_the_area_the_reader_asked_for(self):
+        """``complete.json``'s own ``area`` is the key, not the publication's
+        name: the key is what the reader was configured with."""
+        manifest = json.loads(completion_markers(AREA_KEY, 1)[0].content)
+
+        self.assertEqual(manifest["area"], AREA_KEY)
+
     def test_the_pointer_holds_the_version_and_nothing_else(self):
-        markers = completion_markers("kenya", 178835040000)
+        markers = completion_markers(AREA_KEY, 178835040000)
 
         self.assertEqual(markers[1].content, b"178835040000")
 
     def test_the_manifest_carries_a_null_geographic_extent(self):
         """A non-null one is what the GEOS polygon leak needs; coverage is
         bounded by maximum_gridpoint_distance instead."""
-        manifest = json.loads(completion_markers("kenya", 1)[0].content)
+        manifest = json.loads(completion_markers(AREA_KEY, 1)[0].content)
 
         self.assertIsNone(manifest["geographic_extent"])
 
     def test_time_until_next_is_nanoseconds_because_go_reads_a_duration(self):
-        manifest = json.loads(completion_markers("kenya", 1, timedelta(hours=12))[0].content)
+        manifest = json.loads(completion_markers(AREA_KEY, 1, timedelta(hours=12))[0].content)
 
         self.assertEqual(manifest["time_until_next"], 12 * 3600 * 1_000_000_000)
 
     def test_it_is_omitted_when_there_is_nothing_to_measure(self):
-        manifest = json.loads(completion_markers("kenya", 1)[0].content)
+        manifest = json.loads(completion_markers(AREA_KEY, 1)[0].content)
 
         self.assertNotIn("time_until_next", manifest)
 
@@ -179,11 +191,10 @@ class MarkersAreNotWriterOutputTests(SimpleTestCase):
     remembered."""
 
     def test_the_writer_cannot_stage_a_marker(self):
-        from georiva.core.publishing import PublicationSink
-        from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_SLUG
+        from georiva_publisher_forti.models import instance_sink
 
-        sink = PublicationSink("kenya", SINK_SLUG, marker_patterns=MARKER_PATTERNS, bucket=None)
+        sink = instance_sink()
 
-        for path in ("latest/kenya", "kenya/1/complete.json"):
+        for path in ("latest/central.kenya", "central.kenya/1/complete.json"):
             with self.subTest(path=path), self.assertRaises(MarkerOrderingError):
                 sink.write(path, b"x")

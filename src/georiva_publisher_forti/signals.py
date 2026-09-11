@@ -35,7 +35,7 @@ def on_run_closed(sender, run, **kwargs):
     if not dispatch_publish(publication.pk):
         logger.info(
             "forti: %s already in flight when run %s closed — the running build or the sweep will pick the change up",
-            publication.area,
+            publication.slug,
             run.reference_time,
         )
 

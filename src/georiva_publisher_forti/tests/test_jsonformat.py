@@ -86,11 +86,15 @@ class SettingsTests(SimpleTestCase):
 
 
 class UnionTests(TestCase):
-    def test_the_config_is_the_union_over_an_organisations_areas(self):
-        """One jsonfrontend fronts one organisation's whole prefix, and areas
-        blend by nearest gridpoint — so a consumer sees one document."""
-        coarse = make_publication(make_collection(slug="global"), area="global")
-        fine = make_publication(make_collection(slug="national"), area="national")
+    def test_the_config_is_the_union_over_every_area_on_the_instance(self):
+        """One jsonfrontend fronts one prefix holding every organisation's areas
+        (D20), so there is one document and it is their union. Safe because the
+        name → bucket mapping is a function of the parameter name and not of who
+        published it."""
+        coarse = make_publication(make_collection(slug="global"), slug="global")
+        fine = make_publication(make_collection(org_slug="other-org"), slug="national")
+
+        self.assertNotEqual(coarse.organisation, fine.organisation)
         coarse.published_parameters = ["air_temperature_2m"]
         fine.published_parameters = ["precipitation_amount_acc6h"]
 

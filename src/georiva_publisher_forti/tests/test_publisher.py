@@ -26,7 +26,7 @@ from django.test import TestCase, override_settings
 from georiva.core.publishing import MarkerOrderingError, PublicationSink
 from georiva.core.storage import Bucket, BucketType
 from georiva_publisher_forti import publisher
-from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_SLUG, FortiPublication
+from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_ROOT, FortiPublication
 from georiva_publisher_forti.publisher import GridMoved, publish
 
 from .factories import make_collection, make_publication, make_run, write_cogs
@@ -58,6 +58,9 @@ class PublishTestCase(TestCase):
 
         self.collection = make_collection()
         self.publication = make_publication(self.collection)
+        # Every path below is derived from the key, never spelled: the key is
+        # `{org}.{area}` and the organisation is generated per test.
+        self.area_key = self.publication.area_key
         write_cogs(self.collection, self.cogs, step_hours=3, steps=9)
         make_run(self.collection)
 
@@ -76,9 +79,8 @@ class PublishTestCase(TestCase):
         bucket = self.bucket
 
         def sink(self_publication):
-            return PublicationSink(
-                self_publication.organisation.slug,
-                SINK_SLUG,
+            return PublicationSink.instance_wide(
+                SINK_ROOT,
                 marker_patterns=MARKER_PATTERNS,
                 bucket=bucket,
             )
@@ -106,10 +108,10 @@ class EndToEndTests(PublishTestCase):
         result = publish(self.publication)
         sink = self.sink()
 
-        pointed_at = int(sink.read_bytes("latest/kenya").decode())
+        pointed_at = int(sink.read_bytes(f"latest/{self.area_key}").decode())
 
         self.assertEqual(pointed_at, result["version"])
-        self.assertTrue(sink.exists(f"kenya/{pointed_at}/complete.json"))
+        self.assertTrue(sink.exists(f"{self.area_key}/{pointed_at}/complete.json"))
 
     def test_the_tree_has_the_four_objects_a_reader_opens(self):
         publish(self.publication)
@@ -118,7 +120,7 @@ class EndToEndTests(PublishTestCase):
 
         for name in ("latitude", "longitude", "data", "meta.json"):
             with self.subTest(object=name):
-                self.assertTrue(sink.exists(f"kenya/{self.reread().published_version}/{grid_id}/{name}"))
+                self.assertTrue(sink.exists(f"{self.area_key}/{self.reread().published_version}/{grid_id}/{name}"))
 
     def test_the_grid_directory_is_the_md5_of_the_coordinates(self):
         import hashlib
@@ -128,8 +130,8 @@ class EndToEndTests(PublishTestCase):
         version = self.reread().published_version
         grid_id = self.reread().grid_id
 
-        latitude = sink.read_bytes(f"kenya/{version}/{grid_id}/latitude")
-        longitude = sink.read_bytes(f"kenya/{version}/{grid_id}/longitude")
+        latitude = sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/latitude")
+        longitude = sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/longitude")
 
         self.assertEqual(hashlib.md5(latitude + longitude).hexdigest(), grid_id)
 
@@ -140,8 +142,8 @@ class EndToEndTests(PublishTestCase):
         version = self.reread().published_version
         grid_id = self.reread().grid_id
 
-        meta = json.loads(sink.read_bytes(f"kenya/{version}/{grid_id}/meta.json"))
-        values = np.frombuffer(sink.read_bytes(f"kenya/{version}/{grid_id}/data"), dtype="<i2")
+        meta = json.loads(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/meta.json"))
+        values = np.frombuffer(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/data"), dtype="<i2")
 
         entry = meta["parameters"]["air_temperature_2m"]
         stride = meta["number_of_points"]
@@ -157,8 +159,8 @@ class EndToEndTests(PublishTestCase):
         version = self.reread().published_version
         grid_id = self.reread().grid_id
 
-        meta = json.loads(sink.read_bytes(f"kenya/{version}/{grid_id}/meta.json"))
-        values = np.frombuffer(sink.read_bytes(f"kenya/{version}/{grid_id}/data"), dtype="<i2")
+        meta = json.loads(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/meta.json"))
+        values = np.frombuffer(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/data"), dtype="<i2")
 
         entry = meta["parameters"]["precipitation_amount_acc6h"]
         stride = meta["number_of_points"]
@@ -172,7 +174,7 @@ class EndToEndTests(PublishTestCase):
         version = self.reread().published_version
         grid_id = self.reread().grid_id
 
-        meta = json.loads(sink.read_bytes(f"kenya/{version}/{grid_id}/meta.json"))
+        meta = json.loads(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/meta.json"))
         instants = meta["parameters"]["air_temperature_2m"]["times"]
         windows = meta["parameters"]["precipitation_amount_acc6h"]["times"]
 
@@ -206,7 +208,7 @@ class MarkerOrderingTests(PublishTestCase):
 
         def watched_write(self_sink, relpath, content):
             key = original_write(self_sink, relpath, content)
-            seen[relpath] = self_sink.exists(f"latest/{self.publication.area}")
+            seen[relpath] = self_sink.exists(f"latest/{self.area_key}")
             return key
 
         type(sink).write = watched_write
@@ -236,7 +238,7 @@ class MarkerOrderingTests(PublishTestCase):
         with self.assertRaises(OSError):
             publish(self.publication)
 
-        self.assertFalse(self.sink().exists("latest/kenya"))
+        self.assertFalse(self.sink().exists(f"latest/{self.area_key}"))
 
     def test_the_engine_refuses_markers_over_bytes_that_are_not_there(self):
         sink = self.sink()
@@ -244,7 +246,10 @@ class MarkerOrderingTests(PublishTestCase):
         with self.assertRaises(MarkerOrderingError):
             from georiva_publisher_forti.writer import completion_markers
 
-            sink.publish_markers(completion_markers("kenya", 1), require_staged=["kenya/1/grid/data"])
+            sink.publish_markers(
+                completion_markers(self.area_key, 1),
+                require_staged=[f"{self.area_key}/1/grid/data"],
+            )
 
 
 class RepublishTests(PublishTestCase):
@@ -262,7 +267,7 @@ class RepublishTests(PublishTestCase):
         second = publish(self.reread())
 
         self.assertGreater(second["version"], first["version"])
-        self.assertEqual(int(self.sink().read_bytes("latest/kenya").decode()), second["version"])
+        self.assertEqual(int(self.sink().read_bytes(f"latest/{self.area_key}").decode()), second["version"])
 
     def test_a_grid_that_moved_is_refused_rather_than_published(self):
         """Every stored value is addressed by an ordinal into the point list, and
@@ -291,9 +296,27 @@ class RetentionTests(PublishTestCase):
     def test_only_the_newest_versions_survive(self):
         self._publish_versions(publisher.VERSIONS_KEPT + 2)
 
-        remaining = self.sink().children("kenya")
+        remaining = self.sink().children(self.area_key)
 
         self.assertEqual(len(remaining), publisher.VERSIONS_KEPT)
+
+    def test_retention_never_reaches_past_this_publication_s_own_area(self):
+        """The root is shared now. A prune that took a prefix by name rather than
+        by area key would cost every organisation at once, and nothing downstream
+        would report it — the readers would simply stop finding data.
+
+        Core refuses only ``delete_prefix("")``; it cannot refuse ``"latest"`` or
+        ``"config"``, because which names under the root are areas is this
+        plugin's grammar. So this is the plugin's guarantee to hold.
+        """
+        sink = self.sink()
+        sink.write("other-org.ecmwf-ifs/1/abc/data", b"another tenant's bytes")
+        sink.write("jsonformat.json", b"{}")
+
+        self._publish_versions(publisher.VERSIONS_KEPT + 2)
+
+        self.assertTrue(sink.exists("other-org.ecmwf-ifs/1/abc/data"))
+        self.assertTrue(sink.exists("jsonformat.json"))
 
     def test_a_pruned_version_takes_its_own_manifest_with_it(self):
         """``complete.json`` is a completion marker, and a version directory that
@@ -301,13 +324,13 @@ class RetentionTests(PublishTestCase):
         versions = self._publish_versions(publisher.VERSIONS_KEPT + 1)
         sink = self.sink()
 
-        self.assertFalse(sink.exists(f"kenya/{versions[0]}/complete.json"))
+        self.assertFalse(sink.exists(f"{self.area_key}/{versions[0]}/complete.json"))
 
     def test_the_version_a_reader_is_following_is_never_pruned(self):
         versions = self._publish_versions(publisher.VERSIONS_KEPT + 1)
         sink = self.sink()
 
-        current = int(sink.read_bytes("latest/kenya").decode())
+        current = int(sink.read_bytes(f"latest/{self.area_key}").decode())
 
         self.assertEqual(current, versions[-1])
-        self.assertTrue(sink.exists(f"kenya/{current}/complete.json"))
+        self.assertTrue(sink.exists(f"{self.area_key}/{current}/complete.json"))

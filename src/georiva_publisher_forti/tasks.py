@@ -65,10 +65,10 @@ def publish_forti_area(self, publication_id: int, claim: str = "") -> None:
     except NothingToPublish as exc:
         # Retrying cannot help until more data arrives, and the sweep would
         # otherwise re-dispatch this every five minutes forever.
-        logger.info("publish_forti_area: %s — %s", publication.area, exc)
+        logger.info("publish_forti_area: %s — %s", publication.area_key, exc)
         publication.mark_no_data()
     except Exception as exc:
-        logger.exception("publish_forti_area: failed for %s", publication.area)
+        logger.exception("publish_forti_area: failed for %s", publication.area_key)
         publication.mark_failed(str(exc))
 
 
@@ -101,31 +101,29 @@ def sweep_forti_publications() -> None:
     queue="georiva-default",
 )
 def refresh_forti_jsonformat() -> None:
-    """Rewrite each organisation's ``jsonformat.json`` from its publications.
+    """Rewrite the instance's ``jsonformat.json`` from every publication.
 
-    Separate from the publish because the document is org-level and a publish is
-    area-level: writing it inside a publish would make one area's build depend on
-    every other area's state, and would rewrite it once per area per run.
+    Separate from the publish because the document spans the instance and a
+    publish is one area: writing it inside a publish would make one area's build
+    depend on every other area's state, and would rewrite it once per area per
+    run.
+
+    One query and one write, never a loop over organisations. The document is
+    instance-wide (D20), so one organisation's refresh is the file that governs
+    every organisation's serving — and a per-org writer would leave whichever
+    organisation refreshed last as the only one whose parameters survive.
     """
+    from . import jsonformat
     from .models import FortiPublication
 
-    publications = list(
-        FortiPublication.objects.filter(is_enabled=True).select_related("collection__catalog__organisation")
-    )
+    publications = list(FortiPublication.objects.filter(is_enabled=True))
 
-    by_organisation = {}
-    for publication in publications:
-        by_organisation.setdefault(publication.organisation, []).append(publication)
-
-    from . import jsonformat
-
-    for organisation, owned in by_organisation.items():
-        try:
-            key = jsonformat.publish(organisation, owned)
-        except Exception:
-            logger.exception("refresh_forti_jsonformat: failed for %s", organisation.slug)
-        else:
-            logger.info("refresh_forti_jsonformat: wrote %s", key)
+    try:
+        key = jsonformat.publish(publications)
+    except Exception:
+        logger.exception("refresh_forti_jsonformat: failed")
+    else:
+        logger.info("refresh_forti_jsonformat: wrote %s", key)
 
 
 @app.task(
@@ -146,7 +144,7 @@ def prune_forti_publications(self) -> None:
         try:
             pruned = prune(publication)
         except Exception as exc:
-            logger.warning("prune_forti_publications: %s failed: %s", publication.area, exc)
+            logger.warning("prune_forti_publications: %s failed: %s", publication.area_key, exc)
             FortiPublicationBuildLog.record(
                 publication,
                 FortiPublicationBuildLog.Kind.GC,

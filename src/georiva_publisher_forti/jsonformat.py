@@ -1,11 +1,17 @@
 """The config that turns Forti's bytes back into locationforecast 2.0.
 
 ``jsonfrontend`` reads one config describing which internal parameter belongs in
-which time bucket and under what name. It is **org-level**, not per-area — one
-``jsonfrontend`` fronts one organisation's whole prefix — so it is the union over
-that organisation's enabled publications: a coarse global area and a finer
-national one blend by nearest gridpoint, and a consumer sees one document either
-way.
+which time bucket and under what name. It is **instance-wide** (D20), because one
+``jsonfrontend`` now fronts one prefix holding every organisation's areas — so it
+is the union over every enabled publication on the instance.
+
+A union is safe across tenants for the same reason it was already safe across
+areas: the name → bucket mapping is a static function of the parameter *name* and
+not of who published it, and jsonfrontend omits an empty duration bucket entirely
+(`encode.go:184`) — a 3-hourly model returns no ``next_1_hours`` while an hourly
+one does, from one document. What it genuinely costs is the three settings below:
+``cut_forecast``, ``data_expiry_offset`` and ``skip_altitude`` are now global, so
+an hourly model and a 12-hourly one share one expiry hint.
 
 Two settings copied from met.no's production config rather than the README:
 
@@ -24,7 +30,7 @@ DATA_EXPIRY_OFFSET = 1800
 
 
 def build(publications) -> dict:
-    """The union config for one organisation's enabled publications.
+    """The union config for every enabled publication on the instance.
 
     A parameter appears if *any* area publishes it, because jsonfrontend resolves
     per point against whichever area answered — an area that lacks a parameter
@@ -68,20 +74,22 @@ def build(publications) -> dict:
     }
 
 
-def publish(organisation, publications) -> str | None:
-    """Write the organisation's ``jsonformat.json``. Returns the key, or None.
+def publish(publications) -> str | None:
+    """Write the instance's ``jsonformat.json``. Returns the key, or None.
 
     Not a completion marker: nothing loads on its appearance, and jsonfrontend
-    reads it once at startup. It lives at the root of the org's prefix because it
+    reads it once at startup. It lives at the root of the prefix because it
     describes the whole prefix rather than any one area.
+
+    One argument and no organisation, deliberately. There is exactly one of these
+    files now, so an org-at-a-time writer would have each organisation's refresh
+    overwrite the last one's parameters — and the loser would be a live tenant
+    whose consumers simply stop being offered a field.
     """
     publications = [publication for publication in publications if publication.is_enabled]
     if not publications:
         return None
 
-    from georiva.core.publishing import PublicationSink
+    from .models import instance_sink
 
-    from .models import MARKER_PATTERNS, SINK_SLUG
-
-    sink = PublicationSink(organisation.slug, SINK_SLUG, marker_patterns=MARKER_PATTERNS)
-    return sink.write_json("jsonformat.json", build(publications))
+    return instance_sink().write_json("jsonformat.json", build(publications))

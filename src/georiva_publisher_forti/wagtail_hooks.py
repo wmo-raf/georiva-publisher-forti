@@ -2,8 +2,8 @@
 
 Almost everything on the model is *output* — the pinned grid, what was last
 published, the lock bookkeeping — so the form offers only the handful of fields
-that are genuinely decisions: which collection, what the area is called, how far
-it reaches, and whether it is on.
+that are genuinely decisions: which collection, what the model is called, who may
+ask for it, how far it reaches, and whether it is on.
 
 The one action worth a button is a re-queue. It goes through ``queue_rebuild``
 rather than dispatching, so it shares the sweep's locking exactly and cannot take
@@ -31,16 +31,23 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     model = FortiPublication
     icon = "site"
     menu_label = "Forti publications"
-    list_display = ["area", "collection", "status", "published_version", "built_at"]
-    list_filter = ["status", "is_enabled"]
+    list_display = ["slug", "collection", "visibility", "status", "published_version", "built_at"]
+    list_filter = ["status", "visibility", "is_enabled"]
     panels = [
         MultiFieldPanel(
             [
                 FieldPanel("collection"),
-                FieldPanel("area"),
+                FieldPanel("slug"),
+                FieldPanel("visibility"),
                 FieldPanel("is_enabled"),
             ],
             heading="What is published",
+            help_text=(
+                "The slug is the name a consumer asks by — GET /api/forecast/"
+                "{slug}/ — and a segment of every storage key, so it is fixed "
+                "once this model has published. Leave it and the visibility "
+                "blank to take the catalog slug and the collection's own tier."
+            ),
         ),
         MultiFieldPanel(
             [
@@ -95,11 +102,11 @@ def queue_rebuild(request, publication_pk):
     publication = get_object_or_404(FortiPublication, pk=publication_pk)
 
     if publication.queue_rebuild():
-        messages.success(request, f"{publication.area} will be republished by the next sweep.")
+        messages.success(request, f"{publication.slug} will be republished by the next sweep.")
     else:
         messages.warning(
             request,
-            f"{publication.area} is being published right now — leaving it to the worker that holds it.",
+            f"{publication.slug} is being published right now — leaving it to the worker that holds it.",
         )
 
     return redirect(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list"))
