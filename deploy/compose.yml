@@ -1,0 +1,425 @@
+# The Forti serving pair, and the sidecar that feeds it.
+#
+# ONE PAIR FOR THE INSTANCE (D14). An earlier draft generated this file — one
+# `rawdataforecaster` + `jsonfrontend` per organisation, rendered by
+# `manage.py generate_forti_compose` — because `bestArea` (`forecast.go:92`)
+# walked every loaded dataset and returned the globally nearest gridpoint, and
+# the gRPC surface carried no area field. With no request-time scoping to add,
+# a process holding two organisations' areas answered across tenants as
+# arithmetic, silently, and the more often the closer the two areas were.
+# Separate processes with separate `?prefix=` were the only isolation available
+# (D3), and a generator was the only way to get a variable number of them.
+#
+# The fork took the other half of that trade. `wmo-raf/forti` `develop` gives
+# `GetForecastRequest` a repeated `areas` filter and reports the answering area
+# back as `ForecastMeta.area` → `properties.meta.area`, so the boundary moved
+# from *which process is asked* to *what the request names*, and is checked on
+# every response (D14/D16). One pair serves every tenant.
+#
+# The generator's other argument was true and has simply stopped mattering:
+# compose cannot declare a variable number of services, and organisations are
+# runtime data — created in Wagtail, not at deploy. That is why this file is
+# static rather than why the generator is gone. `compose.py`,
+# `generate_forti_compose` and `test_compose.py` are not edited down to this
+# file; they are deleted, because the thing they existed to reconcile no longer
+# needs reconciling. They remain on the parked branch `feat/serving-config` as
+# the record of what was tried.
+#
+# ---------------------------------------------------------------------------
+# APPLYING IT
+#
+# This is an **overlay**, not a stack. From core's repository root:
+#
+#   docker compose -f docker-compose.yml \
+#                  -f dev-plugins/georiva-publisher-forti/deploy/compose.yml \
+#                  up -d
+#
+# Operators fetch it at the tag they pinned for this plugin in `plugins.toml`
+# (`deploy/plugins/parse_plugins_toml.py` is what reads that manifest, and its
+# `tag` field is what it appends to the git URL). That pairing is manual — the
+# manifest installs a Python package and nobody re-fetches a compose file when
+# they bump it — which is what `FORTI_COMPOSE_VERSION` below is for.
+#
+# It has to be an overlay rather than a standalone stack for two reasons, and
+# both are about joining core rather than about convenience:
+#
+#   * the sidecar and `rawdataforecaster` reach `georiva-minio` by name, so
+#     they must be on core's network, which is external and named from core's
+#     `.env`;
+#   * every credential here is a reference resolved from core's `.env`, which
+#     compose reads from the *project* directory — the directory of the first
+#     `-f`, not of this file.
+#
+# That second rule is also why `sync.sh` is carried inline below rather than
+# bind-mounted beside this file. A relative host path in an overlay resolves
+# against the first compose file's directory: `./sync.sh` here would be looked
+# for in core's repository root, where it is not. Inline `content:` has no path
+# to get wrong, and it keeps the script and the services that depend on it in
+# one artifact, so nobody ends up holding half of a matched pair.
+#
+# ---------------------------------------------------------------------------
+# NEITHER SERVICE PUBLISHES A PORT
+#
+# `expose:` documents what each listens on; there is no `ports:` anywhere in
+# this file and there must not be. The `auth_request` gate cannot front these:
+# `scope_of` (`core/machine_plane/addresses.py:129`) recognises only
+# `/titiler/` and `/martin/boundary_stats` and denies everything else. The
+# plugin's own `/api/forecast/{model}/` view (M5.6) is the only way in, and it
+# is the thing that resolves the model, sends exactly one `area=`, and checks
+# `meta.area` back.
+#
+# Credentials are referenced, never embedded. This file is committed.
+
+services:
+  # -------------------------------------------------------------------------
+  # The config sidecar. The GeoRiva analogue of forti-control: the filesystem
+  # is the whole interface between the thing that decides the config and the
+  # things that serve with it.
+  #
+  # Two directions, one loop (see the script below for why one and not two):
+  # `_forti/config/` down into the config volume, `/status/*.json` up into
+  # `_forti/status/`. It also writes its own `_forti/status/sidecar.json` — the
+  # compose version, the last pass, and the sha of each document as it actually
+  # landed in the volume, which is the one hop of M5.8's four that nothing else
+  # can report.
+  forti-config-sync:
+    image: ${FORTI_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z}
+    restart: unless-stopped
+    # A `configs:` entry with inline content lands read-only, mode 0444 — it is
+    # not executable and no `chmod` runs anywhere. Naming the interpreter is
+    # the workaround, and it is deliberate rather than stylistic.
+    entrypoint: ["/bin/sh", "/opt/forti/sync.sh"]
+    configs:
+      - source: forti-sync-script
+        target: /opt/forti/sync.sh
+    environment:
+      # Set here and not overridable: it is the identity of *this file*, and an
+      # operator who could edit it could only make the drift check lie. Bump it
+      # with the plugin's version — `test_compose.py` fails if they disagree.
+      FORTI_COMPOSE_VERSION: "0.0.1"
+      # `_forti/` is `models.SINK_ROOT`, the one prefix for the instance (D15).
+      # Also not overridable: a value that disagrees with what the publisher
+      # writes produces an empty config directory and no error.
+      FORTI_PREFIX: "_forti"
+      FORTI_BUCKET: ${GEORIVA_PUBLICATIONS_BUCKET:-georiva-publications}
+      FORTI_S3_ENDPOINT: ${AWS_S3_ENDPOINT_URL:-http://georiva-minio:9000}
+      FORTI_SYNC_INTERVAL: ${FORTI_SYNC_INTERVAL:-60}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}
+    volumes:
+      - forti-config:/config
+      - forti-status:/status
+    healthcheck:
+      # Both services' `watcher.Load()` is fatal on a missing or unreadable
+      # config file, so the pair waits here for the first successful sync
+      # rather than crash-looping until one lands. `refresh()` writes neither
+      # document until it would be accepted — an empty `parameters` map and an
+      # empty `areas` list are both fatal — so "present" is a real gate and not
+      # merely a file test.
+      test:
+        - CMD-SHELL
+        - test -s /config/rawdataforecaster.json && test -s /config/jsonformat.json
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+
+  # -------------------------------------------------------------------------
+  # Reads the published areas straight off the bucket and answers
+  # Get(latitude, longitude, areas...). One process, every tenant.
+  forti-rawdataforecaster:
+    image: ${FORTI_RAWDATAFORECASTER_IMAGE:-forti-rawdataforecaster:v0.8.1-wmo.1}
+    restart: unless-stopped
+    # Watches its config in place. An earlier draft said it "reads its config
+    # once at startup" and that adding an area needed `docker compose restart`.
+    # That stopped being true when the fork's config reload landed:
+    # `ColdChanges` (`rawdataforecaster/internal/server/config/reload.go`)
+    # enumerates the settings a restart is required for — `source.bucket`,
+    # `loader.type`, `loader.configuration`, `maximum_gridpoint_distance` — and
+    # deliberately leaves the area list out, because adding or removing an area
+    # takes effect within one poll. Which is the whole reason M5.5 can rewrite
+    # this document on every publish.
+    command:
+      - -config
+      - /config/rawdataforecaster.json
+      - -port
+      - "5052"
+      - -status-dir
+      - /status
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-${MINIO_ROOT_PASSWORD}}
+      AWS_REGION: ${AWS_S3_REGION_NAME:-us-east-1}
+    volumes:
+      # Read-only: the sidecar is the only writer of /config, and the bucket is
+      # the only writer of the sidecar.
+      - forti-config:/config:ro
+      - forti-status:/status
+    expose:
+      - "5052"
+    depends_on:
+      forti-config-sync:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Turns the packed records back into locationforecast 2.0. Its service name
+  # is the upstream the plugin's view dials, so it is fixed rather than derived
+  # — there is no slug in it any more and no registry to fall out of step with.
+  forti-jsonfrontend:
+    image: ${FORTI_JSONFRONTEND_IMAGE:-forti-jsonfrontend:v0.8.1-wmo.1}
+    restart: unless-stopped
+    command:
+      - -upstream
+      - forti-rawdataforecaster:5052
+      - -config
+      - /config/jsonformat.json
+      - -status-dir
+      - /status
+    volumes:
+      - forti-config:/config:ro
+      - forti-status:/status
+    expose:
+      - "8080"
+    depends_on:
+      forti-rawdataforecaster:
+        condition: service_started
+      forti-config-sync:
+        condition: service_healthy
+
+volumes:
+  # Written only by the sidecar, read only by the pair.
+  forti-config:
+  # Written by the pair (configwatch) and by the sidecar (its own document),
+  # read only by the sidecar. Never a mirror target for anything.
+  forti-status:
+
+networks:
+  # Declared identically to core's so a merge is a no-op, and so that running
+  # this file on its own fails immediately — `GEORIVA_NETWORK_NAME` is unset
+  # outside core's project — rather than starting three containers that cannot
+  # resolve `georiva-minio`.
+  default:
+    external: true
+    name: ${GEORIVA_NETWORK_NAME}
+
+configs:
+  forti-sync-script:
+    # Compose interpolates `${...}` inside inline config content, so every
+    # shell expansion below is written `$$`. An unescaped `$` here is resolved
+    # at `up` time against the operator's environment, usually to the empty
+    # string, and the script that reaches the container is not the one written.
+    content: |
+      #!/bin/sh
+      # The Forti config sidecar. Carried inside deploy/compose.yml so this
+      # script and the services that depend on it are one artifact.
+      #
+      #   down:  <prefix>/config/{rawdataforecaster,jsonformat}.json -> /config
+      #   up:    /status/*.json                                      -> <prefix>/status/
+      #
+      # THE BASENAME COLLIDES ACROSS THE TWO DIRECTIONS. configwatch writes
+      # <status-dir>/<module>.json (`configwatch.go:217`) and one of the two
+      # modules is `rawdataforecaster` — so `status/rawdataforecaster.json`
+      # going up has exactly the same basename as
+      # `config/rawdataforecaster.json` coming down. A pass that got a
+      # direction wrong would overwrite the config GeoRiva wrote with a status
+      # document, and the next `watcher.Load()` would be fatal: a *running*
+      # process keeps the config it has, so the damage would surface at some
+      # later restart with nothing connecting it back to here. Four things
+      # keep that unreachable rather than merely unlikely:
+      #
+      #   * the directions are separate functions with literal, opposite
+      #     endpoints. There is no sync(src, dst) whose arguments could be
+      #     swapped;
+      #   * nothing here runs `mc mirror`, in either direction;
+      #   * the down side names its two documents and never lists the bucket;
+      #   * and a fetched document that does not look like the document it
+      #     claims to be is discarded rather than renamed into place.
+      #
+      # That last check cannot key on `"areas"` alone: the rawdataforecaster
+      # *status* file reports its resident areas under `"areas"` too
+      # (`forecast.go:409`, added by M5.1). What separates them is
+      # `"loaded_sha"` — a `configwatch.Status` field with no `omitempty`, so
+      # it is in every status document and in neither config document.
+      #
+      # ONE LOOP, NOT TWO. Down is config and up is status, and they do mean
+      # different things when they fail: no config yet is ordinary at first
+      # boot and no status is not. They are still one pass, because the thing
+      # that reports the difference is `sidecar.json`, and a document that
+      # describes one coherent pass is worth more than two clocks somebody has
+      # to correlate. Two loops would also still share a container, a restart
+      # policy and a log stream — the same failure domain, with the ordering
+      # of the two directions left to chance instead of written down.
+      set -eu
+
+      : "$${FORTI_BUCKET:?no bucket configured}"
+      : "$${FORTI_S3_ENDPOINT:?no endpoint configured}"
+      : "$${FORTI_PREFIX:?no prefix configured}"
+      : "$${AWS_ACCESS_KEY_ID:?no access key}"
+      : "$${AWS_SECRET_ACCESS_KEY:?no secret key}"
+
+      INTERVAL="$${FORTI_SYNC_INTERVAL:-60}"
+      COMPOSE_VERSION="$${FORTI_COMPOSE_VERSION:-unknown}"
+
+      CONFIG_DIR=/config
+      STATUS_DIR=/status
+
+      # The one assertion that makes the paragraph above structural rather
+      # than aspirational.
+      if [ "$$CONFIG_DIR" = "$$STATUS_DIR" ]; then
+          echo "forti-sync: config and status cannot share a directory" >&2
+          exit 1
+      fi
+
+      CONFIG_REMOTE="forti/$$FORTI_BUCKET/$$FORTI_PREFIX/config"
+      STATUS_REMOTE="forti/$$FORTI_BUCKET/$$FORTI_PREFIX/status"
+
+      now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+      # DOWN. One named document, with the token it must contain.
+      #
+      # `minio/mc` carries no `cmp`, so there is no cheap way to ask whether
+      # the bytes changed and the file is renamed into place on every pass
+      # rather than only on a change. That costs nothing: configwatch stats
+      # size and mtime and only then compares the digest
+      # (`readIfChanged`), so an unchanged document is read once and
+      # discarded rather than re-applied.
+      #
+      # Rename into place, never write in place. A watcher must never observe
+      # half a document — and jsonfrontend keeps serving its previous config
+      # when handed a bad one only if what it is handed is a whole file.
+      fetch_config() {
+          name="$$1"
+          token="$$2"
+          dst="$$CONFIG_DIR/$$name"
+          tmp="$$dst.tmp"
+
+          mc cat "$$CONFIG_REMOTE/$$name" >"$$tmp" 2>/dev/null || {
+              rm -f "$$tmp"
+              return 1
+          }
+          [ -s "$$tmp" ] || {
+              rm -f "$$tmp"
+              return 1
+          }
+
+          body="$$(cat "$$tmp")"
+          case "$$body" in
+              *'"loaded_sha"'*)
+                  rm -f "$$tmp"
+                  echo "forti-sync: refusing a status document at config/$$name" >&2
+                  return 1
+                  ;;
+          esac
+          case "$$body" in
+              *"$$token"*) ;;
+              *)
+                  rm -f "$$tmp"
+                  echo "forti-sync: config/$$name has no $$token" >&2
+                  return 1
+                  ;;
+          esac
+
+          mv "$$tmp" "$$dst"
+      }
+
+      sha_of() {
+          [ -f "$$1" ] || { printf 'null'; return 0; }
+          printf '"%s"' "$$(sha256sum "$$1" | cut -d' ' -f1)"
+      }
+
+      # UP. Every status document in the status directory, under its own
+      # basename. The destination is always `status/` and is never computed,
+      # so this direction cannot reach `config/` however the glob turns out.
+      #
+      # A status file is written only when something moves, and configwatch
+      # puts one back if it goes missing (`refreshState`,
+      # `configwatch.go:199`). An idle process leaving its mtime alone is by
+      # design, so nothing here treats an unchanged file as a stale one: every
+      # pass uploads what is there, and the freshness question is answered by
+      # `loaded_at` inside the document rather than by its mtime.
+      push_status() {
+          ok=0
+          for path in "$$STATUS_DIR"/*.json; do
+              [ -f "$$path" ] || continue
+              case "$$path" in
+                  */sidecar.json) continue ;;
+              esac
+              # The mirror image of the down side's guard: a document with no
+              # `"module"` is not a status document and does not go up.
+              case "$$(cat "$$path")" in
+                  *'"module"'*) ;;
+                  *)
+                      echo "forti-sync: $$path is not a status document" >&2
+                      ok=1
+                      continue
+                      ;;
+              esac
+              mc cp --quiet "$$path" "$$STATUS_REMOTE/" >/dev/null 2>&1 || ok=1
+          done
+          return $$ok
+      }
+
+      # The sidecar's own status document. The compose version is here because
+      # the two Go processes write their status files themselves, through
+      # configwatch, and neither would take a field from a container that does
+      # not own the document. It is a fact about the sidecar anyway, and M5.8
+      # wants it beside the other two.
+      #
+      # `volume` is the third of M5.8's four hops — intended, bucket, volume,
+      # loaded. The first two Django can read for itself and the fourth is
+      # configwatch's `loaded_sha`; this is the only one nothing else can see.
+      #
+      # `upload_ok` describes the *services'* status files pushed this pass.
+      # This document's own upload needs no field: if it is on the bucket with
+      # this `checked_at`, the upload worked.
+      write_sidecar() {
+          tmp="$$STATUS_DIR/sidecar.json.tmp"
+          {
+              printf '{\n'
+              printf '  "module": "sidecar",\n'
+              printf '  "compose_version": "%s",\n' "$$COMPOSE_VERSION"
+              printf '  "checked_at": "%s",\n' "$$(now)"
+              printf '  "interval_seconds": %s,\n' "$$INTERVAL"
+              printf '  "fetch_ok": %s,\n' "$$1"
+              printf '  "upload_ok": %s,\n' "$$2"
+              printf '  "volume": {\n'
+              printf '    "rawdataforecaster.json": %s,\n' \
+                  "$$(sha_of "$$CONFIG_DIR/rawdataforecaster.json")"
+              printf '    "jsonformat.json": %s\n' \
+                  "$$(sha_of "$$CONFIG_DIR/jsonformat.json")"
+              printf '  }\n'
+              printf '}\n'
+          } >"$$tmp"
+          mv "$$tmp" "$$STATUS_DIR/sidecar.json"
+      }
+
+      # `mc alias set` contacts the endpoint, so this doubles as waiting for
+      # MinIO. It is a loop rather than a failed start because the sidecar is
+      # what the pair's healthcheck gates on: exiting here would take the
+      # restart backoff and put it in front of the two services as well.
+      until mc alias set forti "$$FORTI_S3_ENDPOINT" \
+          "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY" >/dev/null 2>&1; do
+          echo "forti-sync: waiting for $$FORTI_S3_ENDPOINT"
+          sleep 5
+      done
+
+      echo "forti-sync: compose $$COMPOSE_VERSION, prefix $$FORTI_PREFIX, every $${INTERVAL}s"
+
+      while true; do
+          fetch_ok=true
+          fetch_config rawdataforecaster.json '"areas"' || fetch_ok=false
+          fetch_config jsonformat.json '"parameters"' || fetch_ok=false
+
+          upload_ok=true
+          push_status || upload_ok=false
+
+          write_sidecar "$$fetch_ok" "$$upload_ok"
+          mc cp --quiet "$$STATUS_DIR/sidecar.json" "$$STATUS_REMOTE/" >/dev/null 2>&1 \
+              || echo "forti-sync: could not push sidecar.json" >&2
+
+          if [ "$$fetch_ok" = false ]; then
+              echo "forti-sync: no config on the bucket yet"
+          fi
+
+          sleep "$$INTERVAL"
+      done
