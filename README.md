@@ -32,7 +32,7 @@ ingestion pipeline, not the API layer.
 
 ```
 RunIngestion closes ──▶ publish ──▶ georiva-publications ──▶ rawdataforecaster ──▶ jsonfrontend
-   (core, ADR 0026)     (here)      {org}/forti/            (met.no, Go)         (met.no, Go)
+   (core, ADR 0026)     (here)      _forti/                 (met.no, Go)         (met.no, Go)
 ```
 
 The build discipline — six states, a claim taken at dispatch, stale-lock
@@ -51,10 +51,12 @@ sink refuses a marker path from `write()` and takes them only through
 ## What it writes
 
 ```
-{org}/forti/
-├── latest/<area>                  ← the load trigger. Polled every 3 s.
-├── jsonformat.json                ← generated, org-level union
-└── <area>/<version>/
+_forti/                              ← rawdataforecaster's ?prefix=
+├── latest/<org>.<slug>              ← the load trigger. Polled every 3 s.
+├── config/jsonformat.json           ← generated, instance-wide union
+├── config/rawdataforecaster.json    ← every published area on the instance
+├── status/<module>.json             ← written by the services, pushed up
+└── <org>.<slug>/<version>/
     ├── complete.json
     └── <md5(lat||lon)>/
         ├── latitude   float32[n_points]
@@ -174,7 +176,7 @@ One publication per collection, in the Wagtail admin under **Forti publications*
 |---|---|---|
 | `publish_forti_area` | `georiva-processing` | on a run closing |
 | `sweep_forti_publications` | `georiva-default` | 5 minutes |
-| `refresh_forti_jsonformat` | `georiva-default` | hourly |
+| `refresh_forti_config` | `georiva-default` | 5 minutes, and inline at the end of a publish |
 | `prune_forti_publications` | `georiva-default` | daily |
 
 Nothing goes on `georiva-ingestion`, which runs one pool process and admits fetch
@@ -184,6 +186,45 @@ published and already servable, so nothing a reader can observe waits on it.
 Retention keeps **5 versions per area**, count-based, and never the version
 `latest/<area>` names however old it is — an area whose feed has stopped still
 has a reader following its last good version.
+
+## Deploying the serving pair
+
+`deploy/compose.yml` is an **overlay** on core's compose, not a stack of its own.
+Fetch it at the tag you pinned for this plugin in `plugins.toml` and apply it
+from core's repository root:
+
+```bash
+docker compose -f docker-compose.yml \
+               -f dev-plugins/georiva-publisher-forti/deploy/compose.yml \
+               up -d
+```
+
+It is static. One `rawdataforecaster` + `jsonfrontend` pair serves the whole
+instance (D14): the fork takes a per-request `areas` filter and reports the
+answering area back, so the tenant boundary is what the request names and is
+checked on every response, rather than which process was asked. There is nothing
+left that varies with the tenant set, so there is nothing to generate.
+
+Neither service publishes a port. The `auth_request` gate cannot front them, so
+the plugin's own `/api/forecast/{model}/` view is the only way in.
+
+A third container, the `mc` sidecar, is the whole interface between the database
+and the two processes. It runs one loop in two directions:
+
+| direction | from | to |
+|---|---|---|
+| down | `_forti/config/*.json` | the config volume both services read |
+| up | each service's status file | `_forti/status/*.json` |
+
+and writes its own `_forti/status/sidecar.json` carrying the compose version, the
+last pass, and the sha of each config document as it landed in the volume — the
+one hop of M5.8's four that nothing else can see.
+
+`FORTI_COMPOSE_VERSION` is set in the file and deliberately not overridable.
+Operators fetch a compose file by hand and install the plugin through
+`plugins.toml`, so the two can drift; this is what lets the verification panel
+say when they have. It is bumped with the plugin's version, and `test_compose.py`
+fails if the two disagree.
 
 ## Tests
 
