@@ -202,6 +202,19 @@ class WithheldTests(PanelTestCase):
 
         self.assertEqual(self.hop(report, "intended", JSONFORMAT).presence, WITHHELD)
 
+    def test_a_withheld_document_over_an_unreadable_bucket_does_not_claim_it_is_empty(self):
+        """No sha anywhere is not the same as nothing ever written: an
+        unreachable hop has no sha either, and "none has ever reached the pair"
+        would be an assertion built on a question that was not answered."""
+        sink = self.sink()
+
+        with patch.object(type(sink), "exists", side_effect=OSError("connection refused")):
+            chain = self.chain(verification.report(sink=sink), JSONFORMAT)
+
+        self.assertEqual(chain.broken_at, "bucket")
+        self.assertIn("could not be read", chain.verdict)
+        self.assertNotIn("has ever reached the pair", chain.verdict)
+
     def test_a_withheld_document_with_a_pair_still_running_is_not_a_fault(self):
         """An empty ``parameters`` map is fatal to jsonfrontend, so the right
         document is the one already there. The panel has to say that rather than
@@ -369,6 +382,30 @@ class AreaTests(PanelTestCase):
 
         self.assertEqual([row.area for row in rows], [self.area])
         self.assertIn("behind the area list", rows[0].verdict)
+
+    def test_resident_with_no_marker_is_not_a_green_row(self):
+        """It loaded from a marker that is no longer there, so it is serving data
+        nothing would load again. Every later branch would have called this
+        "serving the version GeoRiva published" — in green, beside a cell
+        reading "no marker"."""
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}])
+
+        row = self.areas()[0]
+
+        self.assertFalse(row.ok)
+        self.assertIn("no", row.verdict.lower())
+        self.assertIn("latest/ marker", row.verdict)
+
+    def test_resident_with_no_marker_and_a_failing_listing_says_it_cannot_tell(self):
+        """``available`` does not decay, so a listing that is failing makes the
+        absence of a marker unknowable rather than known."""
+        self.write_forecaster(
+            self.sha,
+            areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}],
+            store_error="listing _forti/latest/: unparseable key",
+        )
+
+        self.assertIn("unknown", self.areas()[0].verdict)
 
     def test_an_image_without_the_status_fix_says_so(self):
         """A rawdataforecaster that publishes no state proves only that a

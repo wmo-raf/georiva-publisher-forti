@@ -692,6 +692,17 @@ def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[st
                 f"correct outcome and not a stale one.",
                 None,
             )
+        # "No sha anywhere" is not the same as "nothing was ever written": a hop
+        # that could not be read has no sha either, and asserting that none ever
+        # reached the pair on the strength of a question that was not answered is
+        # the exact collapse the six presences exist to prevent.
+        unread = [hop for hop in hops[1:] if hop.presence in (UNREACHABLE, FOREIGN)]
+        if unread:
+            return (
+                f"GeoRiva would write no {document}. {unread[0].label}: could not be read, so "
+                f"whether the pair is running on an earlier one is unknown.",
+                unread[0].name,
+            )
         return (f"GeoRiva would write no {document}, and none has ever reached the pair.", "bucket")
 
     for hop in hops[1:]:
@@ -762,7 +773,24 @@ def _area_verdict(
         )
     if loaded is None:
         return (f"Version {available} is on the bucket and nothing is resident yet.", False)
-    if available is not None and loaded < available:
+    if available is None:
+        # Resident, and the reader's marker map has no entry. It loaded from a
+        # marker that is no longer there, so the process is serving data nothing
+        # would load again — and every later branch would have called that
+        # "serving the version GeoRiva published", in green, beside a cell
+        # reading "no marker".
+        if store_error:
+            return (
+                f"Serving {loaded}, but the reader cannot list the store, so whether a marker "
+                f"still names that version is unknown. See above.",
+                False,
+            )
+        return (
+            f"Serving {loaded}, but the reader's last successful listing found no "
+            f"latest/ marker for this area. Nothing would load it again.",
+            False,
+        )
+    if loaded < available:
         return (f"Serving {loaded}; {available} is on the bucket and not loaded.", False)
     if published is not None and loaded < published:
         return (
