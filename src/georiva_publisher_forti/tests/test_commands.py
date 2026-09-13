@@ -46,8 +46,20 @@ def run(command, *args, **options):
     return out.getvalue()
 
 
-class RenameTests(TestCase):
+class RenameTests(TemporarySinkMixin, TestCase):
+    """The rename itself, and the preview that prices it.
+
+    Sink-isolated even though the rename is a database operation, because the
+    *preview* is not: it lists the old area key to say what stops being
+    reachable. Without the mixin those reads go to the instance's real
+    publications bucket — which is how a stray ``jsonformat.json`` turned up
+    under ``test-org/forti/`` once already — and the preview assertions below
+    would pass on an empty listing, proving nothing.
+    """
+
     def setUp(self):
+        self.isolate_sink()
+        self.sink = models.instance_sink()
         self.publication = make_publication(make_collection(), slug="kenya")
         FortiPublication.objects.filter(pk=self.publication.pk).update(
             status=FortiPublication.Status.READY,
@@ -61,6 +73,10 @@ class RenameTests(TestCase):
     def reread(self):
         return FortiPublication.objects.get(pk=self.publication.pk)
 
+    def stage_area(self, area_key, version=178925760000):
+        self.sink.write(f"{area_key}/{version}/grid/data", b"packed")
+        self.sink.publish_markers(completion_markers(area_key, version))
+
     def test_a_preview_changes_nothing(self):
         output = run("rename_forti_model", "kenya", "ecmwf-ifs")
 
@@ -71,12 +87,31 @@ class RenameTests(TestCase):
         """The whole cost of the operation, before it is paid.
 
         An operator who cannot see which keys stop being reachable has no way to
-        know that the rename is the easy half.
+        know that the rename is the easy half. Asserted on the object keys
+        themselves and not merely on the area key, which the first line of the
+        preview prints whatever the bucket says — including on the branch where
+        it could not be listed at all.
+        """
+        self.stage_area(f"{ORG}.kenya")
+
+        output = run("rename_forti_model", "kenya", "ecmwf-ifs")
+
+        self.assertIn(f"{ORG}.ecmwf-ifs", output)
+        self.assertIn(f"_forti/{ORG}.kenya/178925760000/grid/data", output)
+        self.assertIn(f"_forti/{ORG}.kenya/178925760000/complete.json", output)
+        self.assertIn(f"_forti/latest/{ORG}.kenya", output)
+
+    def test_the_preview_says_so_when_there_is_nothing_to_orphan(self):
+        """A row that never published has no bytes, and the count must not lie.
+
+        The pointer is appended only where it exists: a preview that always
+        printed ``latest/<key>`` would name an object that is not there, which
+        is the one line an operator would act on.
         """
         output = run("rename_forti_model", "kenya", "ecmwf-ifs")
 
-        self.assertIn(f"{ORG}.kenya", output)
-        self.assertIn(f"{ORG}.ecmwf-ifs", output)
+        self.assertIn("orphaning  nothing", output)
+        self.assertNotIn(f"_forti/latest/{ORG}.kenya", output)
 
     def test_apply_renames_and_unpublishes(self):
         run("rename_forti_model", "kenya", "ecmwf-ifs", apply=True)
@@ -337,9 +372,9 @@ class CleanupOrphanTests(TemporarySinkMixin, TestCase):
         """No config is not the same as a config naming nothing.
 
         The refusal above is only as good as the document it reads. A pass that
-        treated an absent or unparseable ``rawdataforecaster.json`` as "advertises
-        nothing" would delete every area on the bucket at exactly the moment the
-        instance could not tell it not to.
+        treated an unparseable ``rawdataforecaster.json`` as "advertises nothing"
+        would delete every area on the bucket at exactly the moment the instance
+        could not tell it not to.
         """
         self.stage_area(f"{ORG}.kenya")
         self.sink.write(config.RAWDATAFORECASTER_PATH, b"not json")
@@ -347,4 +382,21 @@ class CleanupOrphanTests(TemporarySinkMixin, TestCase):
         with self.assertRaises(CommandError):
             run("cleanup_forti_orphans", apply=True)
 
+        self.assertIn(f"latest/{ORG}.kenya", self.keys())
+
+    def test_an_absent_config_stops_the_pass_too(self):
+        """Absence is the reading that looks safe and is not.
+
+        Usually it means nothing was ever published here — and it equally
+        describes a document somebody deleted by hand while the pair serves on
+        from the copy already in its volume. From here the two are identical, and
+        one of them makes this a deletion of the bytes answering every request.
+        The cost of refusing is a message; the cost of proceeding is unrecoverable.
+        """
+        self.stage_area(f"{ORG}.kenya")
+
+        with self.assertRaises(CommandError) as raised:
+            run("cleanup_forti_orphans", apply=True)
+
+        self.assertIn("not there", str(raised.exception))
         self.assertIn(f"latest/{ORG}.kenya", self.keys())

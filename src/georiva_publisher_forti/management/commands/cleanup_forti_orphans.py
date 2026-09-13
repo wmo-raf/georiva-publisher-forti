@@ -26,10 +26,13 @@ rather than of the operator's memory. Run it straight after a rename and it
 refuses; run it after the republish and the same invocation proceeds, because by
 then the config names the new key and not the old one.
 
-Safe by default: previews unless ``--apply``, and a config document it cannot
-read stops the pass outright — "no config" is not "advertises nothing", and
-treating it as such would sweep every area on the bucket at the one moment the
-instance could not say otherwise.
+Safe by default: previews unless ``--apply``, and **any** answer but a readable
+area list stops the pass — missing, unreadable and unparseable alike. "No config"
+is not "advertises nothing". An absent document usually does mean nothing was
+ever published here, but it also describes a document somebody deleted by hand
+while the pair goes on serving from the copy already in its volume, and those two
+are indistinguishable from here. Treating either as an empty area list would
+sweep live bytes at the one moment the instance could not say otherwise.
 
 **What it cannot see.** The sink is rooted at ``_forti/`` and
 ``PublicationSink.key`` refuses a path that leaves it, so anything published
@@ -49,7 +52,8 @@ import json
 from django.core.management.base import BaseCommand, CommandError
 
 from georiva_publisher_forti import config, models
-from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.models import FortiPublication, marker_path
+from georiva_publisher_forti.sweep import objects_under
 
 #: Names under the sink root that are documents rather than areas. Every area key
 #: is ``{org}.{slug}`` and so contains a dot; none of these does, which is what
@@ -105,7 +109,7 @@ class Command(BaseCommand):
 
         removed = 0
         for area_key, _ in orphans:
-            objects = self._objects(sink, area_key)
+            objects = objects_under(sink, area_key)
             self.stdout.write(self.style.WARNING(f"drop  {area_key} — {len(objects)} object(s)"))
             for key in objects:
                 self.stdout.write(f"        {sink.root}{key}")
@@ -123,7 +127,7 @@ class Command(BaseCommand):
                 # load trigger, so a reader that finds one left behind follows
                 # it to a version directory that is not there and fails at
                 # startup, in an error that does not name the area.
-                if sink.delete(f"latest/{area_key}"):
+                if sink.delete(marker_path(area_key)):
                     removed += 1
 
         if options["apply"]:
@@ -141,9 +145,18 @@ class Command(BaseCommand):
         try:
             raw = sink.read_bytes(config.RAWDATAFORECASTER_PATH)
         except FileNotFoundError:
-            # Nothing has ever been published here. Then nothing is serving, and
-            # the database alone decides.
-            return frozenset()
+            # Not "advertises nothing". Absence is *usually* an instance that has
+            # never published — but it is also a document deleted by hand while
+            # the pair serves on from the copy in its volume, and from here those
+            # two look identical. The first licenses deleting everything
+            # unclaimed; the second makes that a deletion of live bytes.
+            raise CommandError(
+                f"{sink.root}{config.RAWDATAFORECASTER_PATH} is not there. Refusing to sweep: an "
+                f"absent config is not an empty area list — the pair keeps serving whatever its "
+                f"volume already holds, so this cannot tell 'nothing was ever published' from "
+                f"'somebody deleted the document'. Publish something, or delete the prefix by "
+                f"hand if you are certain."
+            ) from None
         except Exception as exc:
             raise CommandError(
                 f"Could not read {sink.root}{config.RAWDATAFORECASTER_PATH} ({exc}). Refusing to "
@@ -180,10 +193,3 @@ class Command(BaseCommand):
         if area_key in advertised:
             return "still advertised by the config on the bucket — republish first, then sweep"
         return None
-
-    def _objects(self, sink, area_key) -> list:
-        objects = sorted(sink.list_keys(area_key))
-        pointer = f"latest/{area_key}"
-        if sink.exists(pointer):
-            objects.append(pointer)
-        return objects

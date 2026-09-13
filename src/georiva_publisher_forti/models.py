@@ -60,6 +60,17 @@ _RENAME_REFUSED = (
 )
 
 
+def marker_path(area_key: str) -> str:
+    """The pointer a reader polls for one area, relative to the sink root.
+
+    A function as well as :meth:`FortiPublication.marker_path`, because the
+    pointer outlives the row: an operator sweeping an area key nothing owns any
+    more has the key and no publication to ask. One spelling either way — a
+    second is a second grammar, and the reader only understands one.
+    """
+    return f"latest/{area_key}"
+
+
 def instance_sink():
     """The sink every Forti publication on this instance shares.
 
@@ -350,7 +361,9 @@ class FortiPublication(BuildDisciplinedModel):
 
     def marker_path(self) -> str:
         """The pointer a reader polls for this area, relative to the sink root."""
-        return f"latest/{self.area_key}"
+        # The module-level function, which is where the grammar lives; a bare
+        # name in a method body resolves to the global, not to this method.
+        return marker_path(self.area_key)
 
     # =========================================================================
     # Validation

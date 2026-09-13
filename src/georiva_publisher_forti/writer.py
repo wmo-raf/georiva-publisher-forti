@@ -34,6 +34,8 @@ import numpy as np
 
 from georiva.core.publishing import CompletionMarker
 
+from .models import marker_path
+
 logger = logging.getLogger(__name__)
 
 INT16_MIN, INT16_MAX = -32768, 32767
@@ -177,7 +179,7 @@ def completion_markers(area_key: str, version: int, time_until_next=None) -> lis
             f"{area_key}/{version}/complete.json",
             json.dumps(complete, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8"),
         ),
-        CompletionMarker(f"latest/{area_key}", str(version).encode("utf-8")),
+        CompletionMarker(marker_path(area_key), str(version).encode("utf-8")),
     ]
 
 

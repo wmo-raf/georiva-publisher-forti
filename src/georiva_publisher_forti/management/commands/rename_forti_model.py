@@ -49,9 +49,9 @@ organisations both publish a model of the current name.
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.core.validators import validate_slug
-from django.db import transaction
 
 from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.sweep import objects_under
 
 
 class Command(BaseCommand):
@@ -104,52 +104,54 @@ class Command(BaseCommand):
                 f"clear the claim, then run this again."
             )
 
-        if self._taken(publication, new, organisation):
+        if self._taken(publication, new):
             raise CommandError(
                 f"{organisation.slug} already publishes a model called {new!r}. The slug is the "
                 f"name a consumer asks by and a segment of every storage key: two models with one "
                 f"name means one of them is unreachable."
             )
 
-        self._describe(publication, new, old_key, new_key)
+        self._describe(publication, new_key)
 
         if not options["apply"]:
             self.stdout.write(self.style.WARNING("\nPreview only. Re-run with --apply to rename."))
             return
 
-        with transaction.atomic():
-            renamed = (
-                FortiPublication.objects.filter(pk=publication.pk, slug=current)
-                .select_for_update()
-                .update(
-                    slug=new,
-                    # Everything below is what "has published" is made of, and it
-                    # all describes bytes under the *old* key. Clearing it in the
-                    # same statement as the slug is what keeps the row honest at
-                    # every instant a reader could observe it:
-                    #
-                    #   published_version  — rdfconfig.servable's filter, and the
-                    #     guard's own precondition;
-                    #   input_fingerprint  — is_up_to_date's, which knows nothing
-                    #     about the slug and would otherwise skip the republish;
-                    #   status             — PENDING is what the sweep picks up.
-                    #
-                    # grid_id and point_count stay. A rename does not move a
-                    # gridpoint, and keeping the pin makes the republish check
-                    # that the point list is still the one every stored ordinal
-                    # was written against.
-                    published_version=None,
-                    published_reference_time=None,
-                    published_step_count=0,
-                    published_parameters=[],
-                    input_fingerprint="",
-                    status=FortiPublication.Status.PENDING,
-                    built_at=None,
-                    error="",
-                    locked_at=None,
-                    locked_by="",
-                )
-            )
+        # One conditional UPDATE, which is the whole mechanism: the ``slug=current``
+        # predicate and the rowcount below are a compare-and-swap, so a second
+        # copy of this command — or a publish that renamed it first — loses
+        # rather than overwrites. No ``atomic()`` and no ``select_for_update()``:
+        # a single statement is already atomic, and ``FOR UPDATE`` is emitted by
+        # ``SQLCompiler``, never by ``SQLUpdateCompiler``, so chaining it here
+        # would take no lock while reading as though it did. This is the idiom
+        # ``claim_for_build`` uses for the same reason.
+        renamed = FortiPublication.objects.filter(pk=publication.pk, slug=current).update(
+            slug=new,
+            # Everything below is what "has published" is made of, and it all
+            # describes bytes under the *old* key. Clearing it in the same
+            # statement as the slug is what keeps the row honest at every instant
+            # a reader could observe it:
+            #
+            #   published_version  — rdfconfig.servable's filter, and the guard's
+            #     own precondition;
+            #   input_fingerprint  — is_up_to_date's, which knows nothing about
+            #     the slug and would otherwise skip the republish;
+            #   status             — PENDING is what the sweep picks up.
+            #
+            # grid_id and point_count stay. A rename does not move a gridpoint,
+            # and keeping the pin makes the republish check that the point list
+            # is still the one every stored ordinal was written against.
+            published_version=None,
+            published_reference_time=None,
+            published_step_count=0,
+            published_parameters=[],
+            input_fingerprint="",
+            status=FortiPublication.Status.PENDING,
+            built_at=None,
+            error="",
+            locked_at=None,
+            locked_by="",
+        )
 
         if not renamed:
             raise CommandError(f"{old_key} changed underneath this command. Nothing was renamed.")
@@ -182,7 +184,7 @@ class Command(BaseCommand):
             raise CommandError(f"{slug!r} is published by more than one organisation ({owners}). Pass --org.")
         return matches[0]
 
-    def _taken(self, publication, new, organisation) -> bool:
+    def _taken(self, publication, new) -> bool:
         """Whether the new name is in use — within this organisation only.
 
         Slugs are unique per organisation and the area key carries the owner, so
@@ -193,16 +195,23 @@ class Command(BaseCommand):
         return (
             FortiPublication.objects.filter(
                 slug=new,
-                collection__catalog__organisation=organisation,
+                collection__catalog__organisation=publication.organisation,
             )
             .exclude(pk=publication.pk)
             .exists()
         )
 
-    def _describe(self, publication, new, old_key, new_key):
-        """What changes, and what stops being reachable when it does."""
+    def _describe(self, publication, new_key):
+        """What changes, and what stops being reachable when it does.
+
+        Takes the row and the one value not derivable from it. The old key, the
+        old slug and the organisation all come off ``publication``; passing them
+        alongside would be four ways to disagree with it.
+        """
+        old_key = publication.area_key
+        new_slug = new_key.split(".", 1)[1]
         self.stdout.write(f"{publication.collection.slug}: {old_key} → {new_key}")
-        self.stdout.write(f"  route      /api/forecast/{publication.slug}/ → /api/forecast/{new}/")
+        self.stdout.write(f"  route      /api/forecast/{publication.slug}/ → /api/forecast/{new_slug}/")
         self.stdout.write(
             f"  published  version {publication.published_version} → none (status {publication.status} → pending)"
         )
@@ -213,10 +222,9 @@ class Command(BaseCommand):
         # and list the real publications bucket from a test run.
         sink = publication.sink()
         try:
-            orphaned = sorted(sink.list_keys(old_key))
-            pointer = f"latest/{old_key}"
-            if sink.exists(pointer):
-                orphaned.append(pointer)
+            # The same reading ``cleanup_forti_orphans`` will take when it comes
+            # to delete these, so the price quoted here is the price paid.
+            orphaned = objects_under(sink, old_key)
         except Exception as exc:
             # The bucket is not this command's dependency — the rename is a
             # database operation and stays one. Not being able to *describe* the
