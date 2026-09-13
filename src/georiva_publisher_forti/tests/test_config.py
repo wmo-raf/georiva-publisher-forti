@@ -253,3 +253,107 @@ class EncodingTests(TestCase):
 
     def test_the_bytes_are_utf8_json_a_go_process_can_read(self):
         self.assertEqual(json.loads(config.encode({"a": "ê"}).decode("utf-8")), {"a": "ê"})
+
+
+class CurrentTests(TemporarySinkMixin, TestCase):
+    """Hop 2, and the three answers it has rather than two.
+
+    ``refresh`` collapses "could not read" into "not there" on purpose; the panel
+    must not. These are the tests that keep the distinction alive at the one
+    place it is made, rather than at the two places it is read.
+    """
+
+    def setUp(self):
+        self.isolate_sink()
+        self.publication = make_publication(
+            make_collection(),
+            slug="ecmwf-ifs",
+            published_version=PUBLISHED,
+            point_count=1920,
+            published_step_count=15,
+            published_parameters=["air_temperature_2m"],
+        )
+
+    def sink(self):
+        from georiva_publisher_forti.models import instance_sink
+
+        return instance_sink()
+
+    def test_a_document_nobody_has_written_is_absent_not_unreachable(self):
+        """The instance that has not cut over yet, which is the ordinary first
+        state and must not read as a failure."""
+        reading = config.current(self.sink(), config.RAWDATAFORECASTER_PATH)
+
+        self.assertEqual(reading.presence, config.ABSENT)
+        self.assertIsNone(reading.sha)
+
+    def test_a_written_document_reads_back_as_the_sha_refresh_compared(self):
+        config.refresh()
+        sink = self.sink()
+
+        reading = config.current(sink, config.RAWDATAFORECASTER_PATH)
+
+        self.assertEqual(reading.presence, config.PRESENT)
+        self.assertEqual(reading.sha, config.sha256(sink.read_bytes(config.RAWDATAFORECASTER_PATH)))
+
+    def test_a_store_that_will_not_answer_is_unreachable_not_absent(self):
+        """A MinIO outage reported as "not published yet" is the one mistake the
+        three-valued answer exists to prevent."""
+        sink = self.sink()
+
+        with patch.object(type(sink), "exists", side_effect=OSError("connection refused")):
+            reading = config.current(sink, config.RAWDATAFORECASTER_PATH)
+
+        self.assertEqual(reading.presence, config.UNREACHABLE)
+        self.assertIsNone(reading.sha)
+        self.assertIn("connection refused", reading.error)
+
+    def test_the_writer_and_the_panel_read_one_sha(self):
+        """``_current_sha`` is an adapter over :func:`current`, not a second
+        implementation of it — so the two cannot come to disagree."""
+        config.refresh()
+        sink = self.sink()
+
+        for path in (config.RAWDATAFORECASTER_PATH, config.JSONFORMAT_PATH):
+            with self.subTest(path=path):
+                self.assertEqual(config._current_sha(sink, path), config.current(sink, path).sha)
+
+
+class IntendedTests(TemporarySinkMixin, TestCase):
+    """Hop 1. What this instance would write if asked right now."""
+
+    def setUp(self):
+        self.isolate_sink()
+        self.publication = make_publication(
+            make_collection(),
+            slug="ecmwf-ifs",
+            published_version=PUBLISHED,
+            point_count=1920,
+            published_step_count=15,
+            published_parameters=["air_temperature_2m"],
+        )
+
+    def test_the_intended_sha_is_the_sha_refresh_writes(self):
+        intended = config.intended()
+        config.refresh()
+
+        from georiva_publisher_forti.models import instance_sink
+
+        sink = instance_sink()
+        for path, sha in intended.items():
+            with self.subTest(path=path):
+                self.assertEqual(sha, config.current(sink, path).sha)
+
+    def test_a_document_that_would_be_rejected_is_absent_rather_than_empty(self):
+        """Absent means "leave what is on the bucket alone", never "delete it" —
+        so the panel has a state to render that is not a mismatch."""
+        self.publication.published_parameters = []
+        self.publication.save()
+
+        self.assertNotIn(config.JSONFORMAT_PATH, config.intended())
+        self.assertIn(config.RAWDATAFORECASTER_PATH, config.intended())
+
+    def test_both_documents_come_from_the_one_query_the_writer_uses(self):
+        with patch.object(config, "publications_to_serve", return_value=[]) as query:
+            self.assertEqual(config.intended(), {})
+        query.assert_called_once_with()

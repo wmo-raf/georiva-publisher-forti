@@ -43,6 +43,7 @@ that has changed.
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 
 from django.conf import settings
 
@@ -69,6 +70,77 @@ def encode(document: dict) -> bytes:
 
 def sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+#: How far a question to the bucket got. Three answers, not two, because the
+#: **difference between the last two is the whole point of the panel**: a
+#: document that is not there yet is an instance that has not cut over, and a
+#: document we could not read is an instance whose object storage is not
+#: answering. Rendering both as "no sha" would report a MinIO outage as "not
+#: published yet", which is the one mistake this vocabulary exists to prevent.
+PRESENT = "present"
+ABSENT = "absent"
+UNREACHABLE = "unreachable"
+
+
+@dataclass(frozen=True)
+class Current:
+    """What the bucket holds at one path, as far as we could find out."""
+
+    presence: str
+    sha: str | None = None
+    error: str | None = None
+
+
+def current(sink, path: str) -> Current:
+    """The sha of what is on the bucket at ``path``, and how sure we are of it.
+
+    The **one** place this hop is computed. :func:`refresh` and M5.8's panel are
+    the two callers and they ask different questions of the same answer — "may I
+    skip the write" and "does the bucket carry what the database intends" — so
+    the shared thing is this function rather than a convention that two
+    implementations stay in step. The panel reading a sha the writer would not
+    have compared against is the exact failure that would make the panel lie
+    about the writer.
+    """
+    try:
+        if not sink.exists(path):
+            return Current(ABSENT)
+        return Current(PRESENT, sha=sha256(sink.read_bytes(path)))
+    except Exception as exc:
+        logger.warning("could not read %s from the bucket", path, exc_info=True)
+        return Current(UNREACHABLE, error=f"{type(exc).__name__}: {exc}")
+
+
+def publications_to_serve():
+    """The rows every document on this instance is built from.
+
+    Written once because :func:`refresh` and the panel must not be able to build
+    from different sets: a panel that reported a document as current while the
+    writer was about to rewrite it — or the reverse — would be confirming its own
+    query rather than the instance's state.
+    """
+    from .models import FortiPublication
+
+    return list(
+        FortiPublication.objects.filter(is_enabled=True).select_related(
+            "collection__catalog__organisation",
+        )
+    )
+
+
+def intended(publications=None) -> dict[str, str]:
+    """Path → the sha of the document this instance would write right now.
+
+    The first of M5.8's four hops, and the reference the other three are
+    compared against. A path **absent** from this map is a document that would
+    be rejected and is therefore not written — see the module docstring — which
+    means "leave what is on the bucket alone" and never "delete it". A reader
+    that renders a missing key as a mismatch has inverted it.
+    """
+    if publications is None:
+        publications = publications_to_serve()
+    return {path: sha256(encode(document)) for path, document in documents(publications, **storage_settings()).items()}
 
 
 def storage_settings() -> dict:
@@ -142,14 +214,10 @@ def refresh(publications=None) -> list[str]:
     sidecar is polling — which the sidecar cannot distinguish from a real change,
     so every reconciler tick would become a config reload on both processes.
     """
-    from .models import FortiPublication, instance_sink
+    from .models import instance_sink
 
     if publications is None:
-        publications = list(
-            FortiPublication.objects.filter(is_enabled=True).select_related(
-                "collection__catalog__organisation",
-            )
-        )
+        publications = publications_to_serve()
 
     sink = instance_sink()
     written = []
@@ -167,14 +235,10 @@ def refresh(publications=None) -> list[str]:
 def _current_sha(sink, path: str) -> str | None:
     """The sha of what is on the bucket, or None if there is nothing to compare.
 
-    A read that fails is deliberately not distinguished from an absent file: the
+    A read that fails is deliberately **collapsed** into an absent file here: the
     only use of the answer is "may I skip the write", and the safe answer to a
-    question that could not be asked is no.
+    question that could not be asked is no. :func:`current` keeps the two apart
+    for the caller that needs them apart, and this is the one line that throws
+    the distinction away — on purpose, where the discarding is visible.
     """
-    try:
-        if not sink.exists(path):
-            return None
-        return sha256(sink.read_bytes(path))
-    except Exception:
-        logger.warning("could not read %s to compare — rewriting", path, exc_info=True)
-        return None
+    return current(sink, path).sha
