@@ -276,7 +276,7 @@ class AgreementTests(PanelTestCase):
         self.assertEqual(chain.hops[3].presence, REFUSED)
         self.assertFalse(chain.hops[3].agrees)
         self.assertEqual(chain.broken_at, "loaded")
-        self.assertIn("read this document and refused it", chain.verdict)
+        self.assertIn("read and rejected", chain.verdict)
 
 
 class StatusDocumentTests(PanelTestCase):

@@ -666,15 +666,19 @@ def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[st
     for hop in hops[1:]:
         if hop.agrees:
             continue
-        if hop.presence == ABSENT:
-            return (f"{hop.label.lower()}: has not happened yet. {hop.detail}".capitalize(), hop.name)
+        # Every verdict is "<the hop that stopped it>: <why>", because the hop
+        # labels are prepositional — "On the bucket", "In the volume" — and read
+        # as nonsense used as the subject of a sentence. The colon also makes the
+        # first word of the answer the operator's next question.
         if hop.presence == UNREACHABLE:
-            return (f"Could not read {hop.label.lower()} — {hop.detail}", hop.name)
-        if hop.presence == FOREIGN:
-            return (hop.detail, hop.name)
-        if hop.presence == REFUSED:
-            return (f"{hop.where} read this document and refused it. {hop.detail}", hop.name)
-        return (f"{hop.label} carries a different document. {_lag(sidecar)}", hop.name)
+            return (f"{hop.label}: could not be read. {hop.detail}", hop.name)
+        if hop.presence == PRESENT:
+            return (
+                f"{hop.label}: a different document from the one GeoRiva intends. {_lag(sidecar)}",
+                hop.name,
+            )
+        # ABSENT, FOREIGN and REFUSED each carry a whole sentence of their own.
+        return (f"{hop.label}: {hop.detail}", hop.name)
 
     return (f"Every hop carries the {document} GeoRiva intends.", None)
 
