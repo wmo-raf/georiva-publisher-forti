@@ -4,7 +4,8 @@ Publishes a GeoRiva forecast collection as met.no **Forti internal-format** poin
 data, so a point forecast can be served as **locationforecast 2.0**.
 
 ```
-GET /api/forecast/?lat=-1.2864&lon=36.8172
+GET /api/forecast/                                   # the models you may see
+GET /api/forecast/ecmwf-ifs/?lat=-1.2864&lon=36.8172 # one point out of one model
 ```
 
 ## Why
@@ -207,6 +208,48 @@ left that varies with the tenant set, so there is nothing to generate.
 
 Neither service publishes a port. The `auth_request` gate cannot front them, so
 the plugin's own `/api/forecast/{model}/` view is the only way in.
+
+## Serving
+
+The route reaches `/api/` through core's plugin URL hook: core discovers this
+package's `api_urls` module and includes it, and knows nothing else about a point
+forecast (D19). Everything the view needs — the upstream's name, the timeout, the
+throttle rate, the cache lifetime — is read here with a default that lives here,
+so core ships no `GEORIVA_FORTI_*` setting at all.
+
+| setting | default | |
+|---|---|---|
+| `GEORIVA_FORTI_JSONFRONTEND_HOST` | `forti-jsonfrontend` | the service name in `deploy/compose.yml` |
+| `GEORIVA_FORTI_JSONFRONTEND_PORT` | `8080` | |
+| `GEORIVA_FORTI_TIMEOUT` | `5` | seconds; jsonfrontend gives its own upstream 1.5 s |
+| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | per caller per organisation; `None` disables |
+| `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be shared |
+
+**The model is the resource, and it is also the tenant boundary.** The path
+selects one `FortiPublication`; the view sends exactly one `area={org}.{slug}`
+and refuses to serve a document whose `properties.meta.area` is anything else.
+Omitting the area is not "no areas" but *every organisation's areas*, so there is
+one function that builds an upstream query and it raises before the socket rather
+than letting an empty one reach it.
+
+**A model you may not see is absent, not forbidden.** The listing and the detail
+route ask one query — `FortiPublication.objects.visible_to(request)`, scoped to
+the host's organisation — so a private model is missing from the listing *and*
+404s when named, and the endpoint cannot be used to enumerate what a tenant
+publishes (D18). Visibility is read from the publication **and** its collection,
+because narrowing the collection later is an ordinary edit by somebody with no
+reason to know a Forti publication exists.
+
+**Only a public model's forecast is marked cacheable.** `Cache-Control: public,
+max-age=…` on a successful public answer, `private, no-store` otherwise, nothing
+cacheable on an error, and never on the listing — which varies by audience at a
+URL that carries none. The `/api/` proxy cache stores only what an upstream marks
+(core's ADR 0029) and its key carries no identity, so the marking has to mean
+"safe for whoever asks next".
+
+The reasoning, and the five things `bc94464` got right about a design that no
+longer exists, are in
+[`docs/adr/0001-the-model-is-the-public-resource.md`](docs/adr/0001-the-model-is-the-public-resource.md).
 
 A third container, the `mc` sidecar, is the whole interface between the database
 and the two processes. It runs one loop in two directions:

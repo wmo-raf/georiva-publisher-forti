@@ -29,6 +29,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from georiva.core.build_discipline import BuildAttemptLog, BuildDisciplinedModel
+from georiva.core.models import Collection, visible_visibilities
 
 #: The one prefix every Forti publication on this instance writes into, and the
 #: whole of ``rawdataforecaster``'s ``?prefix=``. It cannot be shadowed by a
@@ -69,6 +70,94 @@ def instance_sink():
     return PublicationSink.instance_wide(SINK_ROOT, marker_patterns=MARKER_PATTERNS)
 
 
+class FortiPublicationQuerySet(models.QuerySet):
+    """Query vocabulary shared by every surface that serves models.
+
+    Written here rather than in the view because the **listing and the detail
+    route must not be able to disagree**. D18's rule is that a model the caller
+    may not see is absent from ``GET /api/forecast/`` *and* 404s on
+    ``GET /api/forecast/{slug}/``, so that the endpoint cannot be used to
+    enumerate what a tenant publishes. Two filters written out at two call sites
+    is exactly the arrangement in which one of them is later narrowed and the
+    other is not — and the failure is silent in the direction that matters: a
+    model missing from a listing still answers on its own URL.
+
+    It deliberately mirrors :class:`~georiva.core.models.collection.CollectionQuerySet`
+    — ``servable`` / ``public`` / ``visible_to``, in that shape and with those
+    names — because a reader who knows what a collection's ``visible_to`` means
+    should not have to check whether a publication's means something else.
+    """
+
+    def servable(self):
+        """Everything this instance could serve to *somebody*.
+
+        Three conditions that travel together and are nothing to do with the
+        caller:
+
+        - **enabled**, which is the operator switch;
+        - **published**, because ``published_version`` is set only after
+          ``latest/<area key>`` is on the bucket. This is the same test
+          :func:`rdfconfig.servable` applies when it builds the area list, and
+          it has to be applied here too: a model advertised before its first
+          publish is one ``rawdataforecaster`` has never been told to load, so
+          the request comes back "Outside of coverage area" — a 404 blaming the
+          caller's coordinates for a model that has simply never run;
+        - the **collection is active and so is its catalog**, which is
+          :meth:`CollectionQuerySet.servable`'s other half. A retired collection
+          stops being served everywhere else on the instance and must stop being
+          served here.
+
+        This set is deliberately a *subset* of what the area list names, never a
+        superset: a reader holding an area nothing serves is wasted memory,
+        while a route serving an area no reader holds is a 503.
+        """
+        return self.filter(
+            is_enabled=True,
+            published_version__isnull=False,
+            collection__is_active=True,
+            collection__catalog__is_active=True,
+        )
+
+    def public(self):
+        """The models this instance will serve to anybody who asks.
+
+        Both tiers, because the effective one is the narrower of the two — see
+        :attr:`FortiPublication.effective_visibility`. This is the predicate the
+        ``Cache-Control: public`` marking is allowed to key on and nothing else:
+        the ``/api/`` cache key carries no identity (ADR 0029), so "public" has
+        to mean "safe to hand to the next caller, whoever they are".
+        """
+        return self.servable().filter(
+            visibility=FortiPublication.Visibility.PUBLIC,
+            collection__visibility=Collection.Visibility.PUBLIC,
+        )
+
+    def visible_to(self, request):
+        """The models ``request`` may be served, by tier and by audience.
+
+        The audience rule is core's, imported rather than restated:
+        :func:`~georiva.core.models.visible_visibilities` asks
+        ``organisations.access.may_see_private``, which is the same function the
+        STAC API and the dataset pages ask. A caller who may not see a private
+        model gets no 403 out of this — the model is simply absent, so the
+        listing omits it and a fetch by name 404s (#273).
+
+        **Both tiers are filtered, the publication's and the collection's.**
+        ``clean()`` already refuses a publication more open than its collection,
+        but validation runs when the *publication* is saved and the collection
+        can be narrowed afterwards — by an editor who has no reason to know a
+        Forti publication exists. Reading the pair means the invariant holds at
+        the moment it is used rather than at the moment it was last checked, and
+        it is what makes ``internal`` unservable here without naming it: no tier
+        this returns ever includes it.
+
+        Says nothing about *whose* rows these are. The organisation filter stays
+        at the call site, wrapped in ``scoped_queryset`` (ADR 0011).
+        """
+        tiers = visible_visibilities(request)
+        return self.servable().filter(visibility__in=tiers, collection__visibility__in=tiers)
+
+
 class FortiPublication(BuildDisciplinedModel):
     """One collection's runs, published as one Forti area.
 
@@ -76,6 +165,8 @@ class FortiPublication(BuildDisciplinedModel):
     states, the claim at dispatch, the stale-lock recovery — comes from the base;
     everything here is what makes it a *Forti* publication.
     """
+
+    objects = FortiPublicationQuerySet.as_manager()
 
     ORGANISATION_LOOKUP = "collection__catalog__organisation"
 
@@ -202,6 +293,27 @@ class FortiPublication(BuildDisciplinedModel):
     @property
     def bbox(self) -> tuple[float, float, float, float]:
         return (self.west, self.south, self.east, self.north)
+
+    @property
+    def effective_visibility(self) -> str:
+        """The tier this model is actually served at: the narrower of the two.
+
+        ``clean()`` refuses a publication more open than its collection, but it
+        runs when the *publication* is saved. Narrowing the collection
+        afterwards is an ordinary edit made by somebody who need not know a
+        Forti publication exists, and it must not leave a stored ``public`` on
+        this row serving what the rest of the instance has stopped serving.
+
+        The read side of that is :meth:`FortiPublicationQuerySet.visible_to`,
+        which filters both tiers and so returns exactly the rows whose effective
+        tier admits the caller. This is the same answer for one row in hand —
+        used where a query cannot be: deciding whether a *response* may carry
+        ``Cache-Control: public``, and saying which tier the listing reports.
+        """
+        collection_visibility = self.collection.visibility
+        if _OPENNESS[self.visibility] <= _OPENNESS[collection_visibility]:
+            return self.visibility
+        return collection_visibility
 
     @property
     def area_key(self) -> str:
