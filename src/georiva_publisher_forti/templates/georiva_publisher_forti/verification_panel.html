@@ -1,0 +1,448 @@
+{% extends "wagtailadmin/generic/base.html" %}
+{% load i18n wagtailadmin_tags %}
+
+{% block titletag %}{% trans "Forti serving" %}{% endblock %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .fv-lead {
+            max-width: 60em;
+            color: var(--w-color-text-label);
+        }
+
+        .fv-section {
+            margin-top: 2.5em;
+        }
+
+        .fv-section h2 {
+            font-size: 1.15em;
+            margin-bottom: 0.2em;
+        }
+
+        .fv-where {
+            color: var(--w-color-grey-400);
+            font-size: 0.85em;
+            margin: 0 0 0.8em;
+        }
+
+        .fv-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .fv-table th,
+        .fv-table td {
+            text-align: left;
+            padding: 0.6em 0.8em;
+            border-bottom: 1px solid var(--w-color-border-furniture);
+            vertical-align: top;
+        }
+
+        .fv-table th {
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--w-color-grey-400);
+        }
+
+        .fv-table code {
+            font-size: 0.9em;
+        }
+
+        .fv-null {
+            color: var(--w-color-grey-400);
+        }
+
+        .fv-detail {
+            display: block;
+            color: var(--w-color-grey-400);
+            font-size: 0.85em;
+            margin-top: 0.25em;
+            max-width: 48em;
+        }
+
+        .fv-badge {
+            display: inline-block;
+            padding: 0.15em 0.6em;
+            border-radius: 999px;
+            font-size: 0.78em;
+            font-weight: 600;
+            white-space: nowrap;
+            border: 1px solid;
+        }
+
+        .fv-badge--agrees {
+            background: color-mix(in srgb, var(--w-color-positive-100) 12%, transparent);
+            color: var(--w-color-positive-100);
+            border-color: color-mix(in srgb, var(--w-color-positive-100) 35%, transparent);
+        }
+
+        .fv-badge--intended {
+            background: transparent;
+            color: var(--w-color-primary);
+            border-color: var(--w-color-border-furniture);
+        }
+
+        .fv-badge--differs,
+        .fv-badge--refused,
+        .fv-badge--foreign {
+            background: var(--w-color-critical-200);
+            color: var(--w-color-white);
+            border-color: var(--w-color-critical-200);
+        }
+
+        .fv-badge--unreachable {
+            background: color-mix(in srgb, var(--w-color-warning-100) 22%, transparent);
+            color: var(--w-color-text-label);
+            border-color: color-mix(in srgb, var(--w-color-warning-100) 55%, transparent);
+        }
+
+        .fv-badge--absent,
+        .fv-badge--withheld {
+            background: var(--w-color-grey-50);
+            color: var(--w-color-grey-400);
+            border-color: var(--w-color-border-furniture);
+        }
+
+        .fv-note {
+            padding: 0.8em 1em;
+            border-radius: 4px;
+            border: 1px solid var(--w-color-border-furniture);
+            background: var(--w-color-grey-50);
+            max-width: 60em;
+        }
+
+        .fv-note--warning {
+            background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
+            border-color: color-mix(in srgb, var(--w-color-warning-100) 45%, transparent);
+        }
+
+        .fv-note--critical {
+            background: color-mix(in srgb, var(--w-color-critical-200) 10%, transparent);
+            border-color: color-mix(in srgb, var(--w-color-critical-200) 40%, transparent);
+        }
+
+        .fv-note p:last-child {
+            margin-bottom: 0;
+        }
+
+        .fv-verdict {
+            margin: 0 0 1em;
+            max-width: 60em;
+        }
+
+        .fv-pairs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4em 2.5em;
+            margin: 0;
+        }
+
+        .fv-pairs div {
+            min-width: 10em;
+        }
+
+        .fv-pairs dt {
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--w-color-grey-400);
+        }
+
+        .fv-pairs dd {
+            margin: 0;
+        }
+
+        .fv-list {
+            margin: 0.3em 0 0;
+            padding-left: 1.1em;
+            font-size: 0.85em;
+        }
+    </style>
+{% endblock %}
+
+{% block main_content %}
+    <p class="fv-lead">
+        {% blocktrans trimmed %}
+            What this instance intends to serve, and what is actually serving it. A config
+            document makes four hops — out of this database, onto the bucket, into the pair's
+            volume, and into the process that reads it — and each one can be stuck without the
+            next one knowing.
+        {% endblocktrans %}
+        {% blocktrans trimmed %}
+            Read-only on purpose: the database is the single authority and the refresh rewrites
+            the bucket from it every five minutes, so anything typed here would be reverted
+            before it took effect.
+        {% endblocktrans %}
+    </p>
+
+    {% if not report.answered %}
+        <div class="fv-note fv-note--warning">
+            <p>
+                {% blocktrans trimmed with deadline=report.deadline %}
+                    The publications bucket did not answer within {{ deadline }} seconds, so every
+                    hop past the first below says so rather than guessing. This is not the same
+                    thing as nothing having been published yet.
+                {% endblocktrans %}
+            </p>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        The chain. One block per document, because the two readers fail
+        independently and an operator is usually chasing one of them.
+    {% endcomment %}
+    {% for chain in report.chains %}
+        <section class="fv-section">
+            <h2>{{ chain.document }}</h2>
+            <p class="fv-where">
+                {% blocktrans trimmed with reader=chain.reader path=chain.path %}
+                    Read by {{ reader }}. Written to _forti/{{ path }}.
+                {% endblocktrans %}
+            </p>
+            <p class="fv-verdict">{{ chain.verdict }}</p>
+
+            <table class="fv-table">
+                <thead>
+                    <tr>
+                        <th scope="col">{% trans "Hop" %}</th>
+                        <th scope="col">{% trans "Where" %}</th>
+                        <th scope="col">{% trans "Digest" %}</th>
+                        <th scope="col">{% trans "Against the database" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for hop in chain.hops %}
+                        <tr>
+                            <th scope="row">{{ hop.label }}</th>
+                            <td>{{ hop.where }}</td>
+                            <td>
+                                {% if hop.sha %}
+                                    <code title="{{ hop.sha }}">{{ hop.short }}</code>
+                                {% else %}
+                                    <span class="fv-null">&mdash;</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="fv-badge fv-badge--{{ hop.badge }}">{{ hop.badge_label }}</span>
+                                {% if hop.detail %}<span class="fv-detail">{{ hop.detail }}</span>{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    {% endfor %}
+
+    {% comment %}
+        The areas. The hop chain proves a file arrived; this is the only thing
+        that proves data is being served out of it.
+    {% endcomment %}
+    <section class="fv-section">
+        <h2>{% trans "Areas resident" %}</h2>
+        <p class="fv-where">
+            {% blocktrans trimmed %}
+                Every area rawdataforecaster is configured with, in the order its configuration
+                lists them. An area on the bucket that nobody asked for is not that process's
+                business and is not here.
+            {% endblocktrans %}
+        </p>
+
+        {% if report.store_error %}
+            <div class="fv-note fv-note--critical">
+                <p>
+                    <strong>{% trans "The store is not answering:" %}</strong>
+                    <code>{{ report.store_error }}</code>
+                </p>
+                <p>
+                    {% blocktrans trimmed %}
+                        The versions below do not decay — they are the last listing that worked — so
+                        without this line a store nobody can reach looks exactly like one holding
+                        precisely what is loaded. This is also the only place a failure to list
+                        _forti/latest/ is ever visible: one unparseable object there takes every
+                        organisation off the air, fatally at startup, and the listing is not
+                        forkable at the pinned version.
+                    {% endblocktrans %}
+                </p>
+            </div>
+        {% endif %}
+
+        {% if report.areas %}
+            <table class="fv-table">
+                <thead>
+                    <tr>
+                        <th scope="col">{% trans "Area" %}</th>
+                        <th scope="col">{% trans "Published by GeoRiva" %}</th>
+                        <th scope="col">{% trans "Seen on the bucket" %}</th>
+                        <th scope="col">{% trans "Resident" %}</th>
+                        <th scope="col">{% trans "What that means" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in report.areas %}
+                        <tr>
+                            <th scope="row"><code>{{ row.area }}</code></th>
+                            <td>
+                                {% if row.published is None %}
+                                    <span class="fv-null" title="{% trans 'No publication on this instance names this area.' %}">&mdash;</span>
+                                {% else %}
+                                    {{ row.published }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.available is None %}
+                                    <span class="fv-null" title="{% trans 'null — no marker at all, which is not version 0.' %}">{% trans "no marker" %}</span>
+                                {% else %}
+                                    {{ row.available }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if row.loaded is None %}
+                                    <span class="fv-null" title="{% trans 'null — nothing resident, which is not version 0.' %}">{% trans "nothing" %}</span>
+                                {% else %}
+                                    {{ row.loaded }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="fv-badge fv-badge--{% if row.ok %}agrees{% else %}absent{% endif %}">
+                                    {% if row.ok %}{% trans "serving" %}{% else %}{% trans "not serving" %}{% endif %}
+                                </span>
+                                <span class="fv-detail">{{ row.verdict }}</span>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <div class="fv-note">
+                <p>{{ report.areas_detail }}</p>
+            </div>
+        {% endif %}
+    </section>
+
+    {% comment %}
+        The three processes. Freshness is the timestamp inside each document and
+        never the object's modification time: the sidecar uploads every pass
+        whether or not anything moved, deliberately.
+    {% endcomment %}
+    <section class="fv-section">
+        <h2>{% trans "The pair, and the sidecar that feeds it" %}</h2>
+        <p class="fv-where">
+            {% blocktrans trimmed %}
+                Ages are taken from the timestamp inside each document, never from when the object
+                was last written — the sidecar re-uploads every pass whether anything moved or not.
+            {% endblocktrans %}
+        </p>
+
+        <div class="fv-note">
+            {% if report.sidecar.reported %}
+                <dl class="fv-pairs">
+                    <div>
+                        <dt>{% trans "Sidecar last pass" %}</dt>
+                        <dd>{{ report.sidecar.checked_at }}{% if report.sidecar.age %} ({{ report.sidecar.age }}){% endif %}</dd>
+                    </div>
+                    <div>
+                        <dt>{% trans "Interval" %}</dt>
+                        <dd>{{ report.sidecar.interval_seconds|default_if_none:"—" }} s</dd>
+                    </div>
+                    <div>
+                        <dt>{% trans "Config fetched" %}</dt>
+                        <dd>{{ report.sidecar.fetch_ok|yesno:"yes,no,unknown" }}</dd>
+                    </div>
+                    <div>
+                        <dt>{% trans "Status uploaded" %}</dt>
+                        <dd>{{ report.sidecar.upload_ok|yesno:"yes,no,unknown" }}</dd>
+                    </div>
+                </dl>
+            {% else %}
+                <p>{{ report.sidecar.detail }}</p>
+            {% endif %}
+        </div>
+
+        <table class="fv-table">
+            <thead>
+                <tr>
+                    <th scope="col">{% trans "Process" %}</th>
+                    <th scope="col">{% trans "Last attempt" %}</th>
+                    <th scope="col">{% trans "Outcome" %}</th>
+                    <th scope="col">{% trans "What it said" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for module in report.modules %}
+                    <tr>
+                        <th scope="row">{{ module.module }}</th>
+                        <td>
+                            {% if module.loaded_at %}
+                                {{ module.loaded_at }}{% if module.age %}<span class="fv-detail">{{ module.age }}</span>{% endif %}
+                            {% else %}
+                                <span class="fv-null">&mdash;</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if not module.reported %}
+                                <span class="fv-badge fv-badge--{{ module.presence }}">{% trans "no status" %}</span>
+                            {% elif module.ok %}
+                                <span class="fv-badge fv-badge--agrees">{% trans "applied" %}</span>
+                            {% else %}
+                                <span class="fv-badge fv-badge--refused">{% trans "refused" %}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if module.detail %}<span class="fv-detail">{{ module.detail }}</span>{% endif %}
+                            {% if module.errors %}
+                                <ul class="fv-list">
+                                    {% for error in module.errors %}<li>{{ error }}</li>{% endfor %}
+                                </ul>
+                            {% endif %}
+                            {% if module.pending_restart %}
+                                <span class="fv-detail">
+                                    {% blocktrans trimmed with fields=module.pending_restart|join:", " %}
+                                        Applied, but a restart is required for: {{ fields }}
+                                    {% endblocktrans %}
+                                </span>
+                            {% endif %}
+                            {% if module.applied %}
+                                <span class="fv-detail">{{ module.applied|join:", " }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    {% comment %}
+        The version pair. Checked at build time by test_compose.py and again
+        here, because the compose file is fetched by hand and the plugin is
+        installed through plugins.toml — so the two can drift on a live instance
+        in a way no test can reach.
+    {% endcomment %}
+    <section class="fv-section">
+        <h2>{% trans "Compose file and plugin" %}</h2>
+        <div class="fv-note {% if report.versions.agree is False %}fv-note--warning{% endif %}">
+            <dl class="fv-pairs">
+                <div>
+                    <dt>{% trans "Running compose file" %}</dt>
+                    <dd>{{ report.versions.compose|default:"—" }}</dd>
+                </div>
+                <div>
+                    <dt>{% trans "Installed plugin" %}</dt>
+                    <dd>{{ report.versions.plugin|default:"—" }}</dd>
+                </div>
+                <div>
+                    <dt>{% trans "Agreement" %}</dt>
+                    <dd>{{ report.versions.agree|yesno:"they match,they have drifted,nothing to compare" }}</dd>
+                </div>
+            </dl>
+            {% if report.versions.detail %}<p class="fv-detail">{{ report.versions.detail }}</p>{% endif %}
+        </div>
+    </section>
+
+    <p class="fv-detail">
+        {% blocktrans trimmed with read_at=report.read_at %}
+            Read from the bucket at {{ read_at }}. Nothing on this page is cached.
+        {% endblocktrans %}
+    </p>
+{% endblock %}

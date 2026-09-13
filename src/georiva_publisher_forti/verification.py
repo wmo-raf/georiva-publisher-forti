@@ -141,6 +141,21 @@ DISTRIBUTION = "georiva-publisher-forti"
 # =============================================================================
 
 
+#: What each badge says out loud. Deliberately not the presence constant: an
+#: operator reads "not yet" and "could not read" as different afternoons, which
+#: is the whole point of their being different states.
+_BADGE_LABELS = {
+    "intended": "the reference",
+    "agrees": "agrees",
+    "differs": "differs",
+    ABSENT: "not yet",
+    UNREACHABLE: "could not read",
+    WITHHELD: "nothing to write",
+    FOREIGN: "not this document",
+    REFUSED: "refused",
+}
+
+
 @dataclass(frozen=True)
 class Hop:
     """One machine's answer about one document."""
@@ -163,6 +178,26 @@ class Hop:
         not collide, short enough to compare four of them by eye; the template
         carries the whole digest in a ``title``."""
         return self.sha[:12] if self.sha else ""
+
+    @property
+    def badge(self) -> str:
+        """The one word this hop gets, decided here rather than in the template.
+
+        Six presences and a three-valued ``agrees`` make eight outcomes, and a
+        template that worked them out with ``{% if %}`` would be the second
+        place the vocabulary is written down — the place nobody tests. The CSS
+        class is this string, so a state with no rule renders unstyled rather
+        than as somebody else's colour.
+        """
+        if self.presence != PRESENT:
+            return self.presence
+        if self.agrees is None:
+            return "intended"
+        return "agrees" if self.agrees else "differs"
+
+    @property
+    def badge_label(self) -> str:
+        return _BADGE_LABELS.get(self.badge, self.badge)
 
 
 @dataclass(frozen=True)
@@ -218,6 +253,10 @@ class Module:
     pending_restart: tuple[str, ...] = ()
     detail: str = ""
 
+    @property
+    def reported(self) -> bool:
+        return self.presence == PRESENT
+
 
 @dataclass(frozen=True)
 class Sidecar:
@@ -232,6 +271,10 @@ class Sidecar:
     upload_ok: bool | None = None
     volume: dict = field(default_factory=dict)
     detail: str = ""
+
+    @property
+    def reported(self) -> bool:
+        return self.presence == PRESENT
 
 
 @dataclass(frozen=True)
