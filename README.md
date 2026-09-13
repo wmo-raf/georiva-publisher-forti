@@ -188,6 +188,46 @@ Retention keeps **5 versions per area**, count-based, and never the version
 `latest/<area>` names however old it is — an area whose feed has stopped still
 has a reader following its last good version.
 
+### Renaming a published model
+
+A model's slug is a segment of every key already on the bucket, so
+`FortiPublication` refuses to rename one that has published — from `clean()` and
+from `save()` both, which closes the admin form and the shell alike. Two commands
+exist for the case where it has to happen anyway. Both preview unless `--apply`.
+
+```bash
+georiva rename_forti_model kenya ecmwf-ifs --apply   # 1
+#                                                      2. republish
+georiva cleanup_forti_orphans --apply                # 3
+```
+
+The rename does not step around the guard; it makes the guard's precondition
+false, clearing the slug and the whole published state in one `update()`. The row
+then says, truthfully, that it has published under no name — so there is no
+instant at which the database claims a version under a slug whose bytes are not
+on the bucket, and an ordinary `.save()` rename is refused again after the next
+publish.
+
+**The order is the whole design.** Deleting the old bytes first leaves the
+instance serving nothing for the length of a publish. Deleting after costs a
+second pass, because `config.documents()` withholds an empty `areas` list rather
+than writing one — so the config on the bucket goes on naming the old area, and
+the old bytes go on answering, right up to the moment the new ones land. The
+panel shows that interval as hop 1 **withheld**, which is the ordering working
+rather than a stale write.
+
+`cleanup_forti_orphans` enforces it: an area key is an orphan only when no row
+claims it **and** the bucket's own `rawdataforecaster.json` no longer advertises
+it. Run straight after a rename it refuses and says why. It is also the only
+thing that removes an area key at all — retention works *within* one, so a
+publication deleted by hand leaves its prefix and its `latest/` pointer behind
+forever.
+
+With real consumers attached, do none of this: their clients have the old slug
+hard-coded and no ordering of ours reaches them. Publish a *second* publication
+under the new name, serve both, and retire the old one after a deprecation
+window — which is what the model's own refusal message recommends.
+
 ## Deploying the serving pair
 
 `deploy/compose.yml` is an **overlay** on core's compose, not a stack of its own.
@@ -251,6 +291,14 @@ URL that carries none. The `/api/` proxy cache stores only what an upstream mark
 The reasoning, and the five things `bc94464` got right about a design that no
 longer exists, are in
 [`docs/adr/0001-the-model-is-the-public-resource.md`](docs/adr/0001-the-model-is-the-public-resource.md).
+
+Two of the rules above look arbitrary from the line they are written on — the
+body-parse test instead of a `Content-Type` check, and the upstream 404 mapped to
+a 503 — and are not. What they cost to find, along with the
+`maximum_gridpoint_distance` measurement and why the `/api/` cache key carries
+`$host`, is in
+[`docs/adr/0002-four-measurements-the-reader-does-not-document.md`](docs/adr/0002-four-measurements-the-reader-does-not-document.md),
+which also records the run that verified this plane end to end.
 
 A third container, the `mc` sidecar, is the whole interface between the database
 and the two processes. It runs one loop in two directions:
