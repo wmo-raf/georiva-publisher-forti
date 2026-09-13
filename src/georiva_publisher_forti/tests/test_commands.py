@@ -1,4 +1,4 @@
-"""The operator commands, and the invariants they are allowed to move.
+"""The two operator commands, and the invariants they are allowed to move.
 
 Both exist because of the same fact: the slug is a segment of every storage key,
 so a rename is a storage operation wearing a database operation's clothes. The
@@ -7,12 +7,17 @@ commands are how an operator performs one anyway — in the order that leaves
 nothing serving from bytes nobody can find.
 
 What is worth testing here is not that the commands do what they say. It is the
-refusals, because each of them is the only thing standing between an operator and
-a state nothing reports. ``rename_forti_model`` must leave the row
-**unpublished**, not merely renamed: a row carrying ``published_version`` under a
-name whose bytes are not on the bucket is advertised by ``rdfconfig.servable``
-and 404s from ``rawdataforecaster`` — the exact state ``serving.py``'s 404 branch
-was written to describe and cannot fix.
+two refusals, because each of them is the only thing standing between an
+operator and a state nothing reports:
+
+- ``rename_forti_model`` must leave the row **unpublished**, not merely renamed.
+  A row carrying ``published_version`` under a name whose bytes are not on the
+  bucket is advertised by ``rdfconfig.servable`` and 404s from
+  ``rawdataforecaster`` — the exact state ``serving.py``'s 404 branch was written
+  to describe and cannot fix.
+- ``cleanup_forti_orphans`` must refuse a key the *bucket's own config* still
+  advertises, whatever the database says. That is what makes "delete after the
+  republish" a property of the tool rather than of the operator's memory.
 """
 
 from io import StringIO
@@ -20,10 +25,14 @@ from io import StringIO
 from django.core.management import CommandError, call_command
 from django.test import TestCase
 
+from georiva.core.publishing import CompletionMarker
 from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG
+from georiva_publisher_forti import config, models
 from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.writer import completion_markers
 
 from .factories import make_collection, make_publication
+from .sink_isolation import TemporarySinkMixin
 
 #: The organisation ``make_collection`` builds under. Every area key below is
 #: derived from it rather than spelled, because the key is ``{org}.{slug}`` and
@@ -182,3 +191,160 @@ class RenameTests(TestCase):
         """
         with self.assertRaises(CommandError):
             run("rename_forti_model", "kenya", "ecmwf.ifs", apply=True)
+
+
+class CleanupOrphanTests(TemporarySinkMixin, TestCase):
+    def setUp(self):
+        self.isolate_sink()
+        # Through the module: ``isolate_sink`` replaces ``models.instance_sink``,
+        # and a name imported at the top of this file would still be the
+        # original — pointing this whole class at the real publications bucket.
+        self.sink = models.instance_sink()
+        self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
+        FortiPublication.objects.filter(pk=self.publication.pk).update(
+            status=FortiPublication.Status.READY,
+            published_version=178925760000,
+        )
+
+    def stage_area(self, area_key, version=178925760000):
+        """One area's bytes as a publish leaves them: data, then both markers.
+
+        Through ``publish_markers`` rather than the bucket, because the markers
+        are the half that matters here — they are what ``delete_prefix`` skips by
+        default and what a reader follows — and staging them by a route the
+        engine does not use would test a layout no publish produces.
+        """
+        self.sink.write(f"{area_key}/{version}/grid/data", b"packed")
+        self.sink.publish_markers(completion_markers(area_key, version))
+
+    def advertise(self, *area_keys):
+        """What the bucket's own ``rawdataforecaster.json`` currently names."""
+        self.sink.write(
+            config.RAWDATAFORECASTER_PATH,
+            config.encode({"areas": list(area_keys)}),
+        )
+
+    def keys(self):
+        return set(self.sink.list_keys())
+
+    def test_an_area_no_row_claims_and_no_config_names_is_dropped(self):
+        self.stage_area(f"{ORG}.kenya")
+        self.advertise(f"{ORG}.ecmwf-ifs")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertNotIn(f"{ORG}.kenya/178925760000/complete.json", self.keys())
+        self.assertNotIn(f"latest/{ORG}.kenya", self.keys())
+
+    def test_the_manifest_goes_too(self):
+        """``*/complete.json`` is a completion marker.
+
+        ``delete_prefix`` leaves markers alone by default — a reader may be
+        following one — so a version directory that cannot lose its manifest
+        never goes away, and the orphan survives every pass looking deleted.
+        """
+        self.stage_area(f"{ORG}.kenya")
+        self.advertise(f"{ORG}.ecmwf-ifs")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertEqual(self.keys(), {config.RAWDATAFORECASTER_PATH})
+
+    def test_a_preview_deletes_nothing(self):
+        self.stage_area(f"{ORG}.kenya")
+        self.advertise(f"{ORG}.ecmwf-ifs")
+        before = self.keys()
+
+        output = run("cleanup_forti_orphans")
+
+        self.assertEqual(self.keys(), before)
+        self.assertIn(f"{ORG}.kenya", output)
+
+    def test_an_area_the_bucket_config_still_advertises_is_kept(self):
+        """The ordering rule, made structural.
+
+        Between the rename and the republish the database has forgotten
+        ``central.kenya`` and the config document on the bucket has not — because
+        ``config.documents()`` withholds an empty ``areas`` list rather than
+        writing one. Those bytes are what ``rawdataforecaster`` is serving from
+        right now. Deleting them here is the gap the ordering exists to avoid,
+        and the operator cannot see it coming.
+        """
+        self.stage_area(f"{ORG}.kenya")
+        self.advertise(f"{ORG}.kenya")
+
+        output = run("cleanup_forti_orphans", apply=True)
+
+        self.assertIn(f"latest/{ORG}.kenya", self.keys())
+        self.assertIn("still advertised", output)
+
+    def test_an_area_a_row_claims_is_kept(self):
+        self.stage_area(f"{ORG}.ecmwf-ifs")
+        self.advertise(f"{ORG}.ecmwf-ifs")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertIn(f"latest/{ORG}.ecmwf-ifs", self.keys())
+
+    def test_a_disabled_rows_area_is_not_an_orphan(self):
+        """Disabling is an operator switch, not a deletion.
+
+        A disabled publication drops out of every serving query and out of the
+        config — so by the config test alone its bytes look free. The row still
+        owns the name, and re-enabling it must not need a republish.
+        """
+        FortiPublication.objects.filter(pk=self.publication.pk).update(is_enabled=False)
+        self.stage_area(f"{ORG}.ecmwf-ifs")
+        self.advertise(f"{ORG}.other")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertIn(f"latest/{ORG}.ecmwf-ifs", self.keys())
+
+    def test_the_documents_beside_the_areas_are_never_areas(self):
+        """``config``, ``status`` and ``latest`` share the root with the areas.
+
+        They are told apart by the dot every area key contains and none of them
+        has. A pass that read them as areas would delete this instance's config
+        the first time it ran.
+        """
+        self.sink.write(config.RAWDATAFORECASTER_PATH, config.encode({"areas": [f"{ORG}.ecmwf-ifs"]}))
+        self.sink.write(config.JSONFORMAT_PATH, config.encode({"parameters": {}}))
+        self.sink.write("status/sidecar.json", b"{}")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertEqual(
+            self.keys(),
+            {config.RAWDATAFORECASTER_PATH, config.JSONFORMAT_PATH, "status/sidecar.json"},
+        )
+
+    def test_a_pointer_with_nothing_under_it_is_an_orphan(self):
+        """``latest/<key>`` outlives its data if a prune ever ran out of order.
+
+        It is the worst object on the bucket to leave behind: it is the load
+        trigger, so a reader follows it to a version directory that is not there
+        and fails at startup with an error that does not name the area.
+        """
+        self.sink.publish_markers([CompletionMarker(f"latest/{ORG}.kenya", b"178925760000")])
+        self.advertise(f"{ORG}.ecmwf-ifs")
+
+        run("cleanup_forti_orphans", apply=True)
+
+        self.assertNotIn(f"latest/{ORG}.kenya", self.keys())
+
+    def test_an_unreadable_config_stops_the_pass(self):
+        """No config is not the same as a config naming nothing.
+
+        The refusal above is only as good as the document it reads. A pass that
+        treated an absent or unparseable ``rawdataforecaster.json`` as "advertises
+        nothing" would delete every area on the bucket at exactly the moment the
+        instance could not tell it not to.
+        """
+        self.stage_area(f"{ORG}.kenya")
+        self.sink.write(config.RAWDATAFORECASTER_PATH, b"not json")
+
+        with self.assertRaises(CommandError):
+            run("cleanup_forti_orphans", apply=True)
+
+        self.assertIn(f"latest/{ORG}.kenya", self.keys())
