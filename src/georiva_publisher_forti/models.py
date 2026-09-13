@@ -19,10 +19,12 @@ answered from is now a Django query and a check on every response, not a propert
 of the storage layout; see ADR 0027's amendment in core.
 
 That also moves what the name *means*. An area used to describe a **window** —
-the live row is called ``kenya`` — and now it names a **model**: ``ecmwf-ifs``,
-with Kenya implied by the bbox. One request names exactly one area and no two are
-ever blended (D16), so what a consumer picks between is the model, and
-``FortiPublication.slug`` is the name it picks by (D17).
+the first row on the dev instance was called ``kenya`` — and now it names a
+**model**: that row is ``ecmwf-ifs``, with Kenya implied by the bbox. One request
+names exactly one area and no two are ever blended (D16), so what a consumer
+picks between is the model, and ``FortiPublication.slug`` is the name it picks by
+(D17). Renaming it is what ``rename_forti_model`` exists for and what
+``_published_under_another_slug`` otherwise refuses.
 """
 
 from django.core.exceptions import ValidationError
