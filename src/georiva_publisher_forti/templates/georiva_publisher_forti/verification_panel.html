@@ -335,8 +335,17 @@
             {% endblocktrans %}
         </p>
 
-        <div class="fv-note">
+        <div class="fv-note {% if report.sidecar.troubled %}fv-note--warning{% endif %}">
             {% if report.sidecar.reported %}
+                {% if report.sidecar.troubled %}
+                    <p>
+                        {% blocktrans trimmed %}
+                            The sidecar ran and did not finish its job. A volume that disagrees with the
+                            bucket, or a status file older than the process that wrote it, follows from
+                            this rather than from either Go service.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
                 <dl class="fv-pairs">
                     <div>
                         <dt>{% trans "Sidecar last pass" %}</dt>

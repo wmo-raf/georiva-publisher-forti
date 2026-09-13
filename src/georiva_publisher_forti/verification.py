@@ -276,6 +276,17 @@ class Sidecar:
     def reported(self) -> bool:
         return self.presence == PRESENT
 
+    @property
+    def troubled(self) -> bool:
+        """A pass that ran and did not do its job.
+
+        Worth its own flag rather than left as two fields in a list: a sidecar
+        that has been failing to fetch for two days is the *cause* of a volume
+        hop that disagrees, and an operator reading the chain above should be
+        pointed at it rather than left to notice a "no" among four figures.
+        """
+        return self.reported and (self.fetch_ok is False or self.upload_ok is False)
+
 
 @dataclass(frozen=True)
 class Versions:
@@ -696,13 +707,29 @@ def _chain(module: str, path: str, intended: dict, bucket: config.Current, sidec
 # =============================================================================
 
 
-def _area_verdict(published: int | None, available: int | None, loaded: int | None) -> tuple[str, bool]:
+def _area_verdict(
+    published: int | None, available: int | None, loaded: int | None, store_error: str
+) -> tuple[str, bool]:
+    """One sentence per row, and it must not send the reader somewhere the page
+    has not rendered.
+
+    ``store_error`` is a parameter rather than read from module state for exactly
+    that: "no marker" means two different things depending on whether the listing
+    that failed to find one had itself failed, and only one of the two is a
+    pointer at the banner above.
+    """
     if loaded is None and available is None:
         if published is None:
             return ("Nothing is published under this key and nothing is resident.", False)
+        if store_error:
+            return (
+                f"GeoRiva has published version {published} and the reader found no marker for "
+                f"it — but its listing is failing, so this figure proves nothing. See above.",
+                False,
+            )
         return (
-            f"GeoRiva has published version {published} but the reader's last listing found no "
-            f"marker for it. Check store_error above.",
+            f"GeoRiva has published version {published}; the reader's last successful listing of "
+            f"_forti/latest/ found no marker for it. The area is configured and off the air.",
             False,
         )
     if loaded is None:
@@ -753,7 +780,7 @@ def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
         seen.add(area)
         loaded = entry.get("loaded")
         available = entry.get("available")
-        verdict, ok = _area_verdict(published.get(area), available, loaded)
+        verdict, ok = _area_verdict(published.get(area), available, loaded, store_error)
         rows.append(
             AreaRow(
                 area=area,

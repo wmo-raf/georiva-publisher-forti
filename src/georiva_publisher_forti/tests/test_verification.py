@@ -15,6 +15,8 @@ of the ones that matter are true of this instance today:
 """
 
 import json
+import threading
+import time
 from unittest.mock import patch
 
 from django.test import TestCase
@@ -143,11 +145,29 @@ class OutageTests(PanelTestCase):
         self.assertEqual(self.hop(report, "bucket").presence, UNREACHABLE)
         self.assertIn("connection refused", self.hop(report, "bucket").detail)
 
+    def slow_report(self, *, blocking_for=3.0, deadline=0.05):
+        """A report over a bucket that will not answer within the deadline.
+
+        The delay is in the fake rather than in a zero deadline on the real
+        reads: a filesystem-backed sink answers in microseconds, so
+        ``deadline=0`` is a race between the worker finishing and the caller
+        starting to wait — and a flaky test of a timeout is worse than none.
+        """
+        started = threading.Event()
+
+        def slow(sink):
+            started.set()
+            time.sleep(blocking_for)
+
+        with patch.object(verification, "_read_all", slow):
+            report = verification.report(sink=self.sink(), deadline=deadline)
+        return report, started
+
     def test_a_bucket_that_does_not_answer_in_time_renders_rather_than_blocks(self):
         """The reads run in one worker thread under one deadline. A page that
         says it could not ask beats a page that holds an admin worker through
         botocore's retry ladder."""
-        report = verification.report(sink=self.sink(), deadline=0.0)
+        report, _ = self.slow_report()
 
         self.assertFalse(report.answered)
         self.assertEqual(self.hop(report, "bucket").presence, UNREACHABLE)
@@ -155,20 +175,16 @@ class OutageTests(PanelTestCase):
 
     def test_the_deadline_does_not_wait_for_the_thread_it_abandoned(self):
         """``shutdown(wait=False)`` is the point: a socket blocked in recv does
-        not care that nobody is waiting, so the request must not either."""
-        started = []
+        not care that nobody is waiting, so the request must not either. The
+        assertion is on the clock — the call returns while the read is still
+        running, which ``shutdown(wait=True)`` would not allow."""
+        began = time.monotonic()
+        report, started = self.slow_report(blocking_for=5.0, deadline=0.1)
+        elapsed = time.monotonic() - began
 
-        def slow(sink):
-            started.append(True)
-            import time
-
-            time.sleep(3)
-
-        with patch.object(verification, "_read_all", slow):
-            report = verification.report(sink=self.sink(), deadline=0.05)
-
-        self.assertTrue(started)
+        self.assertTrue(started.is_set())
         self.assertFalse(report.answered)
+        self.assertLess(elapsed, 2.0)
 
 
 class WithheldTests(PanelTestCase):
