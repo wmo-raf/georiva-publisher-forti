@@ -113,12 +113,32 @@ SIDECAR_PATH = f"{STATUS_PREFIX}/{SIDECAR_MODULE}.json"
 RAWDATAFORECASTER_STATUS_PATH = f"{STATUS_PREFIX}/{RAWDATAFORECASTER_MODULE}.json"
 JSONFRONTEND_STATUS_PATH = f"{STATUS_PREFIX}/{JSONFRONTEND_MODULE}.json"
 
+
+@dataclass(frozen=True)
+class ChainSpec:
+    """One process, the config document it reads, and the status file it writes.
+
+    Named fields rather than a bare triple, and the reason is the same trap the
+    sidecar spends four guards on: ``config/rawdataforecaster.json`` and
+    ``status/rawdataforecaster.json`` share a basename and mean opposite things.
+    Unpacked positionally this was read three different ways at six call sites —
+    ``for _, path, _``, ``for module, _, path``, ``for module, path, _`` — and a
+    single transposition would have had the panel comparing a status document's
+    sha against the intended config, silently, in the one module whose whole job
+    is to notice that.
+    """
+
+    module: str
+    config_path: str
+    status_path: str
+
+
 #: Which config document each process reads, and therefore which chain its
 #: status file terminates. The sidecar reports the volume hop for both under the
 #: documents' **basenames**, because the volume is a directory and has no prefix.
 CHAINS = (
-    (RAWDATAFORECASTER_MODULE, config.RAWDATAFORECASTER_PATH, RAWDATAFORECASTER_STATUS_PATH),
-    (JSONFRONTEND_MODULE, config.JSONFORMAT_PATH, JSONFRONTEND_STATUS_PATH),
+    ChainSpec(RAWDATAFORECASTER_MODULE, config.RAWDATAFORECASTER_PATH, RAWDATAFORECASTER_STATUS_PATH),
+    ChainSpec(JSONFRONTEND_MODULE, config.JSONFORMAT_PATH, JSONFRONTEND_STATUS_PATH),
 )
 
 #: Seconds the whole set of remote reads is allowed. Deliberately short: this is
@@ -213,10 +233,6 @@ class Chain:
     #: ``None`` when every hop does. The answer to "where did it stop".
     broken_at: str | None = None
 
-    @property
-    def agreed(self) -> bool:
-        return self.broken_at is None
-
 
 @dataclass(frozen=True)
 class AreaRow:
@@ -275,6 +291,21 @@ class Sidecar:
     @property
     def reported(self) -> bool:
         return self.presence == PRESENT
+
+    @property
+    def lag(self) -> str:
+        """How much staleness is ordinary at the hops below this one.
+
+        Here rather than beside the verdict that prints it: it reads nothing but
+        this document, and a verdict about a *volume* that quoted the sidecar's
+        interval from somewhere else would be the second place that fact lives.
+        """
+        if self.reported and self.interval_seconds:
+            return (
+                f"The sidecar passes every {self.interval_seconds} s and last ran "
+                f"{self.age or 'at an unknown time'}, so one pass of lag is ordinary here and longer is not."
+            )
+        return "One sidecar pass of lag is ordinary here; longer is not."
 
     @property
     def troubled(self) -> bool:
@@ -371,10 +402,10 @@ def _read_all(sink) -> dict:
     the set rather than each read separately — five reads with their own
     deadlines is five deadlines long."""
     return {
-        "config": {path: config.current(sink, path) for _, path, _ in CHAINS},
+        "config": {spec.config_path: config.current(sink, spec.config_path) for spec in CHAINS},
         "status": {
             SIDECAR_PATH: read_status(sink, SIDECAR_PATH, SIDECAR_MODULE),
-            **{path: read_status(sink, path, module) for module, _, path in CHAINS},
+            **{spec.status_path: read_status(sink, spec.status_path, spec.module) for spec in CHAINS},
         },
     }
 
@@ -674,7 +705,7 @@ def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[st
             return (f"{hop.label}: could not be read. {hop.detail}", hop.name)
         if hop.presence == PRESENT:
             return (
-                f"{hop.label}: a different document from the one GeoRiva intends. {_lag(sidecar)}",
+                f"{hop.label}: a different document from the one GeoRiva intends. {sidecar.lag}",
                 hop.name,
             )
         # ABSENT, FOREIGN and REFUSED each carry a whole sentence of their own.
@@ -683,27 +714,20 @@ def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[st
     return (f"Every hop carries the {document} GeoRiva intends.", None)
 
 
-def _lag(sidecar: Sidecar) -> str:
-    if sidecar.presence == PRESENT and sidecar.interval_seconds:
-        return (
-            f"The sidecar passes every {sidecar.interval_seconds} s and last ran "
-            f"{sidecar.age or 'at an unknown time'}, so one pass of lag is ordinary here and longer is not."
-        )
-    return "One sidecar pass of lag is ordinary here; longer is not."
-
-
-def _chain(module: str, path: str, intended: dict, bucket: config.Current, sidecar: Sidecar, status: Module) -> Chain:
-    document = PurePosixPath(path).name
+def _chain(spec: ChainSpec, intended: dict, bucket: config.Current, sidecar: Sidecar, status: Module) -> Chain:
+    document = PurePosixPath(spec.config_path).name
     hops = _compared(
         (
-            _intended_hop(path, document, intended),
-            _bucket_hop(path, bucket),
+            _intended_hop(spec.config_path, document, intended),
+            _bucket_hop(spec.config_path, bucket),
             _volume_hop(document, sidecar),
-            _loaded_hop(module, status),
+            _loaded_hop(spec.module, status),
         )
     )
     verdict, broken_at = _verdict(document, hops, sidecar)
-    return Chain(document=document, reader=module, path=path, hops=hops, verdict=verdict, broken_at=broken_at)
+    return Chain(
+        document=document, reader=spec.module, path=spec.config_path, hops=hops, verdict=verdict, broken_at=broken_at
+    )
 
 
 # =============================================================================
@@ -845,7 +869,7 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
     if readings is None:
         timed_out = f"The bucket did not answer within {deadline:g} s."
         readings = {
-            "config": {path: config.Current(UNREACHABLE, error=timed_out) for _, path, _ in CHAINS},
+            "config": {spec.config_path: config.Current(UNREACHABLE, error=timed_out) for spec in CHAINS},
             "status": dict.fromkeys(
                 (SIDECAR_PATH, RAWDATAFORECASTER_STATUS_PATH, JSONFRONTEND_STATUS_PATH),
                 _Status(UNREACHABLE, detail=timed_out),
@@ -853,10 +877,10 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
         }
 
     sidecar = _sidecar(readings["status"][SIDECAR_PATH])
-    modules = {module: _module(module, readings["status"][path]) for module, _, path in CHAINS}
+    modules = {spec.module: _module(spec.module, readings["status"][spec.status_path]) for spec in CHAINS}
 
     chains = tuple(
-        _chain(module, path, intended, readings["config"][path], sidecar, modules[module]) for module, path, _ in CHAINS
+        _chain(spec, intended, readings["config"][spec.config_path], sidecar, modules[spec.module]) for spec in CHAINS
     )
 
     forecaster = readings["status"][RAWDATAFORECASTER_STATUS_PATH]
@@ -873,7 +897,7 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
         answered=answered,
         chains=chains,
         sidecar=sidecar,
-        modules=tuple(modules[module] for module, _, _ in CHAINS),
+        modules=tuple(modules[spec.module] for spec in CHAINS),
         areas=areas,
         areas_detail=areas_detail,
         store_error=store_error,
