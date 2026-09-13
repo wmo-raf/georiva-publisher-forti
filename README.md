@@ -246,6 +246,22 @@ answering area back, so the tenant boundary is what the request names and is
 checked on every response, rather than which process was asked. There is nothing
 left that varies with the tenant set, so there is nothing to generate.
 
+### The images
+
+`forti-rawdataforecaster:v0.8.1-wmo.1` and `forti-jsonfrontend:v0.8.1-wmo.1`,
+built from `wmo-raf/forti` `develop`. The tag is the upstream release plus the
+fork's revision, so it says both what it is and that it is not stock.
+
+There was an earlier pair tagged **`:spike`**, built during M0 from the same
+sources at a different commit. Both tags, and the two stopped containers still
+holding them, were removed from the dev daemon during M5.9's cutover, because
+`:spike` names no commit anybody can reconstruct and an image whose provenance is
+gone is one somebody eventually starts. If you find either on a daemon, it
+predates this file — delete it rather than run it.
+
+Until the images come from CI, nothing runs `govulncheck` or a build matrix over
+the fork's commits. That is a known gap, not an oversight.
+
 Neither service publishes a port. The `auth_request` gate cannot front them, so
 the plugin's own `/api/forecast/{model}/` view is the only way in.
 
