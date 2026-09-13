@@ -224,6 +224,7 @@ so core ships no `GEORIVA_FORTI_*` setting at all.
 | `GEORIVA_FORTI_TIMEOUT` | `5` | seconds; jsonfrontend gives its own upstream 1.5 s |
 | `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | per caller per organisation; `None` disables |
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be shared |
+| `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the verification panel gives the bucket, all reads together |
 
 **The model is the resource, and it is also the tenant boundary.** The path
 selects one `FortiPublication`; the view sends exactly one `area={org}.{slug}`
@@ -268,6 +269,64 @@ Operators fetch a compose file by hand and install the plugin through
 `plugins.toml`, so the two can drift; this is what lets the verification panel
 say when they have. It is bumped with the plugin's version, and `test_compose.py`
 fails if the two disagree.
+
+## Verifying it is actually serving
+
+**Settings → Forti serving**, in the Wagtail admin. Read-only, and visible to the
+instance admin alone.
+
+A config document makes four hops between this database and the process that
+serves from it, and each one can be stuck without the next one knowing:
+
+| hop | who writes it | where the panel reads it |
+|---|---|---|
+| intended | `config.documents()` over the publication rows | this database |
+| bucket | `refresh_forti_config` | `_forti/config/*.json` |
+| volume | the `mc` sidecar | `_forti/status/sidecar.json`, its `volume` map |
+| loaded | `configwatch` in each Go process | `_forti/status/{module}.json` |
+
+Compared by sha, each hop against the **first** rather than against the one
+before it — so the page names where the chain broke instead of showing a run of
+crosses. Beside it: the areas `rawdataforecaster` is actually holding and at
+which version, the sidecar's last pass, and the compose file's version against
+the installed plugin's.
+
+Three distinctions the page is careful about, because collapsing any of them
+turns it into a page that lies in the case it exists for:
+
+- **"not yet" is not "could not read".** An instance that has not cut over and
+  an object store that has stopped answering are both "no sha" from Django's
+  side. Every remote read is one of *present / absent / unreachable*.
+- **A document GeoRiva declines to write is not a missing one.** An empty
+  `parameters` map is fatal to `jsonfrontend` and an empty `areas` list to
+  `rawdataforecaster`, so neither is ever written — which means "leave what is
+  on the bucket alone", and the panel says so rather than rendering a mismatch.
+- **`loaded_sha` is what the process last *read*, not what it is serving.**
+  `configwatch` records the digest whatever the outcome, and a rejected document
+  leaves the previous configuration running. A fourth hop carrying the intended
+  sha with `ok: false` is therefore a *refusal*, and is rendered as one.
+
+Freshness is the `loaded_at` / `checked_at` timestamp inside each document, never
+the object's modification time: the sidecar re-uploads every pass whether or not
+anything moved. The bucket's copy of a status file therefore lags by up to
+`FORTI_SYNC_INTERVAL` (60 s by default).
+
+Read-only is a decision, not a limitation (D23). The database is the single
+authority and `refresh_forti_config` rewrites the bucket from it every five
+minutes, so a form here would be reverted within one tick while still showing
+what somebody typed.
+
+Every figure on the page is instance-wide — `rawdataforecaster.json` names every
+organisation's area keys, one sha describes one document governing every tenant —
+which is why it is the instance admin's page and not an organisation's. An
+organisation administrator consequently cannot see whether their own model is
+resident; that question belongs beside the publication, whose organisation is
+known.
+
+The reads are done on request, all of them inside one worker thread under one
+deadline (`GEORIVA_FORTI_VERIFICATION_DEADLINE`, 5 s), and nothing is cached. A
+page that says it could not ask beats one that holds an admin worker through
+botocore's retry ladder.
 
 ## Tests
 

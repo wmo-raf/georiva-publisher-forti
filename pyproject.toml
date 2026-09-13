@@ -23,3 +23,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Named rather than left to `include-package-data`, which without a MANIFEST.in
+# or a VCS plugin picks up nothing: `APP_DIRS` finds templates on disk in a dev
+# checkout whatever this says, so a wheel missing them would fail only on an
+# operator's instance and only on one page.
+[tool.setuptools.package-data]
+georiva_publisher_forti = ["templates/**/*.html"]
