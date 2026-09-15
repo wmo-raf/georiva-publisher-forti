@@ -53,11 +53,6 @@ _OPENNESS = {"public": 2, "private": 1, "internal": 0, "": 0}
 #: of the setting an operator can actually change. The failure it replaces was
 #: ``NothingToPublish: has no closed run`` — true, one step downstream of the
 #: cause, and recorded in a build log nothing renders.
-#:
-#: One sentence, read by both halves of the guard: :meth:`FortiPublication.clean`
-#: raises it, and the admin form hands it to the collection field as its
-#: invalid-choice message. Two spellings would drift, and the operator would meet
-#: whichever half happened to fire.
 NOT_A_FORECAST = (
     "Only a forecast collection can be published. Nothing opens a run for a "
     "collection that is not one, and a Forti model publishes one closed run at a "
@@ -380,10 +375,8 @@ class FortiPublication(BuildDisciplinedModel):
 
         if self.collection_id:
             collection = self.collection
-            # First, and chained ahead of the visibility pair, because it is the
-            # further-back fact: a collection that is not a forecast has no runs
-            # to be visible *of*. An operator who fixes it re-validates and meets
-            # whatever else is wrong.
+            # Chained ahead of the visibility pair because it is the further-back
+            # fact: a collection with no runs has nothing to be visible *of*.
             if not collection.is_forecast:
                 errors["collection"] = NOT_A_FORECAST
             elif collection.visibility == collection.Visibility.INTERNAL:

@@ -12,16 +12,24 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('georiva_publisher_forti', '0002_fortipublication_slug_and_visibility'),
-        ('georivacore', '0015_alter_variable_value_max_alter_variable_value_min'),
+        ("georiva_publisher_forti", "0002_fortipublication_slug_and_visibility"),
+        ("georivacore", "0015_alter_variable_value_max_alter_variable_value_min"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='fortipublication',
-            name='collection',
-            field=models.OneToOneField(help_text='The forecast collection this model publishes. A collection that is not a forecast is refused — nothing opens a run for one, so there would be nothing to transpose. So is an internal collection: it is a derivation intermediate, not a dataset.', on_delete=django.db.models.deletion.CASCADE, related_name='forti_publication', to='georivacore.collection'),
+            model_name="fortipublication",
+            name="collection",
+            field=models.OneToOneField(
+                help_text=(
+                    "The forecast collection this model publishes. A collection that is not a forecast is "
+                    "refused — nothing opens a run for one, so there would be nothing to transpose. So is an "
+                    "internal collection: it is a derivation intermediate, not a dataset."
+                ),
+                on_delete=django.db.models.deletion.CASCADE,
+                related_name="forti_publication",
+                to="georivacore.collection",
+            ),
         ),
     ]

@@ -5,11 +5,10 @@ published, the lock bookkeeping — so the form offers only the handful of field
 that are genuinely decisions: which collection, what the model is called, who may
 ask for it, how far it reaches, and whether it is on.
 
-The one decision the form *guards* is which collection. Only a forecast
-collection can publish — nothing opens a run for any other kind — so the chooser
-offers those and :class:`ForecastCollectionsOnlyMixin` below says what happens to
-an id that did not come from it. Everything else that would stop a publish is
-diagnosis rather than a filter, and is not this form's business.
+The one decision the form *guards* is which collection: the chooser offers
+forecast collections and nothing else, for the reason
+:class:`ForecastCollectionsOnly` gives. Everything else that would stop a publish
+is diagnosis rather than a filter, and is not this form's business.
 
 The one action worth a button is a re-queue. It goes through ``queue_rebuild``
 rather than dispatching, so it shares the sweep's locking exactly and cannot take
@@ -48,6 +47,7 @@ known — not by widening this page's audience to the documents it cannot narrow
 import logging
 
 from django.contrib import messages
+from django.forms.models import ModelChoiceIterator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -61,41 +61,56 @@ from wagtail.snippets.views.snippets import CreateView, EditView, SnippetViewSet
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
 from . import verification
-from .models import NOT_A_FORECAST, FortiPublication
+from .models import FortiPublication
 
 logger = logging.getLogger(__name__)
 
 
+class ForecastCollectionsOnly(ModelChoiceIterator):
+    """The forecast collections of whatever queryset the field ends up with.
+
+    The **offered** rows, not the **accepted** ones, and the distinction is the
+    whole design. Narrowing the field's queryset would have been shorter and
+    would have made the form answer a non-forecast id with "Select a valid
+    choice. That choice is not one of the available choices." — because a field
+    that rejects a value excludes it from model validation, so
+    :meth:`FortiPublication.clean`'s sentence would never reach the page. Leaving
+    the queryset alone keeps the two halves distinct: the dropdown is the hint,
+    and the refusal an operator reads is the model's.
+
+    It also keeps the *other* refusal honest. The same field is narrowed to the
+    active organisation by ``scope_form_fields``, and a foreign id has to be
+    turned away as absent — not told to tick a box on a collection that is
+    already a forecast and simply is not theirs.
+
+    The filter is applied per iterator rather than once, because the field builds
+    a fresh one each time its queryset is assigned: ``scope_form_fields`` runs
+    after this mixin and reassigns it, and the rebuilt iterator then filters the
+    organisation's rows rather than the instance's.
+    """
+
+    def __init__(self, field):
+        super().__init__(field)
+        self.queryset = self.queryset.filter(is_forecast=True)
+
+
 class ForecastCollectionsOnlyMixin:
-    """Narrows the collection field to what this plugin can actually publish.
+    """Offers the collection chooser only what this plugin can actually publish.
 
     The widget half of the forecast rule; :meth:`FortiPublication.clean` is the
     other half, and neither is sufficient alone. A filtered dropdown is a hint an
     operator meets before choosing wrongly, and a posted id never goes near it;
     model validation is the rule, and an operator meets it only after filling in
     the whole form.
-
-    Narrowed on the *form instance* rather than on the form class, for two
-    reasons. Its fields are deep copies rebuilt per request, so filtering an
-    already-filtered queryset cannot accumulate; and it composes with
-    ``scope_form_fields``, which narrows the same field to the active
-    organisation from the same ``get_form`` chain. Filtering what is there is
-    what keeps both: assigning a fresh ``Collection.objects`` queryset would
-    satisfy the forecast rule and quietly hand one organisation another's
-    collections.
-
-    The invalid-choice message is replaced because Django's would otherwise be
-    the only thing a directly posted id produces. A form field that rejects a
-    value excludes it from model validation, so ``clean()``'s refusal never
-    renders on this form — and "Select a valid choice" names neither the rule nor
-    anything to do about it.
     """
 
     def get_form(self, *args, **kwargs):
         form = super().get_form(*args, **kwargs)
         field = form.fields["collection"]
-        field.queryset = field.queryset.filter(is_forecast=True)
-        field.error_messages["invalid_choice"] = NOT_A_FORECAST
+        field.iterator = ForecastCollectionsOnly
+        # The widget is still holding the iterator built with the field, so the
+        # new class governs nothing until the choices are rebuilt through it.
+        field.widget.choices = field.choices
         return form
 
 
