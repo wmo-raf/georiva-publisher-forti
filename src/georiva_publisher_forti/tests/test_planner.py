@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory
 from django.test import TestCase
 
 from georiva.core.models import Collection, Unit
+from georiva_publisher_forti.models import GENERATION_CEILING, FortiPublication
 from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
 
 from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
@@ -208,3 +209,149 @@ class TimeUntilNextTests(PlannerTestCase):
         self.publication.save(update_fields=["time_until_next_hours"])
 
         self.assertEqual(plan(self.publication).time_until_next, timedelta(hours=6))
+
+
+class GenerationTests(PlannerTestCase):
+    """The half of the version that counts what the run did not change.
+
+    ``rawdataforecaster`` reloads only on a strictly greater version
+    (``forecast.go:293``). A publication republished under a changed
+    configuration writes different bytes for the same run, so without a term
+    that moves independently of the run the pointer keeps its old integer and
+    the reader never loads them — while the panel shows published, available
+    and loaded all equal and reports agreement.
+    """
+
+    def setUp(self):
+        super().setUp()
+        write_cogs(self.collection, self.path)
+        self.run = make_run(self.collection)
+
+    def _publish(self):
+        """Record what a publish would leave on the row, and return the plan.
+
+        The publisher's ``mark_ready``, minus the bytes. The generation is read
+        back off the *plan* rather than off the row, exactly as the publisher
+        does, so a reset the planner decided is what gets stored — which is what
+        makes the row's stored generation and its published stamp agree.
+        """
+        publish_plan = plan(self.publication)
+        FortiPublication.objects.filter(pk=self.publication.pk).update(
+            published_version=publish_plan.version,
+            generation=publish_plan.generation,
+        )
+        self.publication.refresh_from_db()
+        return publish_plan
+
+    def _raise_generation(self, to: int) -> None:
+        self.publication.generation = to
+        self.publication.save(update_fields=["generation"])
+
+    def test_the_version_is_the_run_version_with_the_generation_below_it(self):
+        publish_plan = plan(self.publication)
+
+        self.assertEqual(publish_plan.run_version, self.run.version)
+        self.assertEqual(publish_plan.generation, 0)
+        self.assertEqual(publish_plan.version, self.run.version * GENERATION_CEILING)
+
+    def test_raising_the_generation_raises_the_version(self):
+        first = self._publish().version
+
+        self._raise_generation(1)
+
+        self.assertGreater(plan(self.publication).version, first)
+
+    def test_a_new_run_outranks_any_generation_of_the_one_before_it(self):
+        """Model time dominates, which is what D8 required and this preserves."""
+        self._publish()
+        self._raise_generation(GENERATION_CEILING - 1)
+        highest = self._publish().version
+
+        later = REFERENCE_TIME + timedelta(hours=12)
+        write_cogs(self.collection, self.path, reference_time=later)
+        make_run(self.collection, reference_time=later)
+
+        self.assertGreater(plan(self.publication).version, highest)
+
+    def test_a_republish_of_the_run_outranks_the_generation_below_it(self):
+        """Run republish sits between model time and configuration: a reopened
+        run at generation 0 beats the same run's highest generation."""
+        self._publish()
+        self._raise_generation(GENERATION_CEILING - 1)
+        highest = self._publish().version
+
+        self.run.revision += 1
+        self.run.save(update_fields=["revision"])
+
+        self.assertGreater(plan(self.publication).version, highest)
+
+    def test_the_generation_resets_when_a_new_run_is_published(self):
+        self._publish()
+        self._raise_generation(4)
+        self._publish()
+
+        later = REFERENCE_TIME + timedelta(hours=12)
+        write_cogs(self.collection, self.path, reference_time=later)
+        make_run(self.collection, reference_time=later)
+
+        self.assertEqual(plan(self.publication).generation, 0)
+
+    def test_the_generation_survives_a_republish_of_the_same_run(self):
+        """The counterpart of the reset: it resets per *run*, so planning the
+        run it was raised against again still carries it. Without this the
+        reset would be indistinguishable from never reading the field at all."""
+        self._publish()
+        self._raise_generation(4)
+        self._publish()
+
+        self.assertEqual(plan(self.publication).generation, 4)
+
+    def test_a_run_that_has_never_published_starts_at_generation_zero(self):
+        """There is nothing to supersede yet, so a generation typed in before
+        the first publish names no bytes and is not carried into one."""
+        self._raise_generation(4)
+
+        self.assertEqual(plan(self.publication).generation, 0)
+
+    def test_publishing_at_the_ceiling_is_refused_rather_than_wrapping(self):
+        """A wrapped generation is not a smaller number — it is exactly the
+        stamp the run's next revision would produce, which the reader reads as
+        "I already have this"."""
+        FortiPublication.objects.filter(pk=self.publication.pk).update(
+            published_version=plan(self.publication).version,
+            generation=GENERATION_CEILING,
+        )
+        self.publication.refresh_from_db()
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("generation", str(ctx.exception).lower())
+
+    def test_the_ceiling_is_the_stamp_the_next_revision_claims(self):
+        """The arithmetic the refusal exists for, asserted rather than trusted:
+        this is a collision by *equality*, which strictly-greater cannot see."""
+        wrapped = self.run.version * GENERATION_CEILING + GENERATION_CEILING
+        next_revision = (self.run.version + 1) * GENERATION_CEILING
+
+        self.assertEqual(wrapped, next_revision)
+
+    def test_the_fingerprint_changes_when_the_generation_does(self):
+        """The skip check has to learn about configuration too: the run, the
+        step count and the parameter names are all unmoved by a generation
+        bump, so without this the publish returns early and the bump is never
+        written."""
+        before = self._publish().fingerprint
+
+        self._raise_generation(1)
+
+        self.assertNotEqual(plan(self.publication).fingerprint, before)
+
+    def test_the_fingerprint_is_unmoved_by_anything_that_did_not_change(self):
+        """The other half of the criterion. A fingerprint that changed on every
+        plan would never skip, and the skip is what stops the sweep republishing
+        an unchanged run every five minutes."""
+        self._publish()
+        self._raise_generation(1)
+
+        self.assertEqual(plan(self.publication).fingerprint, plan(self.publication).fingerprint)

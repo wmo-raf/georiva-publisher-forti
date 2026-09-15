@@ -28,10 +28,20 @@ picks between is the model, and ``FortiPublication.slug`` is the name it picks b
 """
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator
 from django.db import models
 
 from georiva.core.build_discipline import BuildAttemptLog, BuildDisciplinedModel
 from georiva.core.models import Collection, visible_visibilities
+
+#: The first generation that would wrap. A generation is the low two digits of
+#: the published version, so 100 of them is not a larger number than 99 — it is
+#: exactly the stamp ``run.version + 1`` produces at generation 0, which is what
+#: the run's *next revision* will claim. A collision by equality is the one the
+#: reader cannot see: ``forecast.go:293`` reloads on strictly greater, so it
+#: reads the second of two identical stamps as "I already have this". Publishing
+#: here is refused rather than wrapped.
+GENERATION_CEILING = 100
 
 #: The one prefix every Forti publication on this instance writes into, and the
 #: whole of ``rawdataforecaster``'s ``?prefix=``. It cannot be shadowed by a
@@ -275,9 +285,35 @@ class FortiPublication(BuildDisciplinedModel):
         null=True,
         blank=True,
         editable=False,
-        help_text="ref_epoch_seconds * 100 + revision — the integer latest/<area key> holds.",
+        help_text=(
+            "run.version * 100 + generation — the integer latest/<area key> "
+            "holds. The run's own half is ref_epoch_seconds * 100 + revision, "
+            "so the whole stamp orders by model time, then by republish of that "
+            "run, then by configuration generation."
+        ),
     )
     published_reference_time = models.DateTimeField(null=True, blank=True, editable=False)
+
+    @property
+    def published_run_version(self) -> int | None:
+        """The run half of what was last published, or ``None`` before the first
+        publish.
+
+        Read back out of the stamp rather than stored beside it, because a second
+        column would be a second authority on the same fact and the two would
+        eventually disagree — ``published_version`` is written by ``mark_ready``
+        alone, and integer division cannot drift from it.
+
+        Rows published by an older version of this plugin hold a *run* version
+        here, not a publication one, so this returns roughly the reference time's
+        epoch seconds — a number no live run's version equals. The generation
+        therefore resets on the first publish after the upgrade, which is the
+        right answer for an unknown predecessor, and the new stamp is ~100x the
+        old one so the pointer still only ever moves forwards.
+        """
+        if self.published_version is None:
+            return None
+        return self.published_version // GENERATION_CEILING
     published_step_count = models.PositiveIntegerField(default=0, editable=False)
     published_parameters = models.JSONField(
         default=list,
@@ -289,6 +325,21 @@ class FortiPublication(BuildDisciplinedModel):
     # =========================================================================
     # Configuration
     # =========================================================================
+
+    generation = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MaxValueValidator(GENERATION_CEILING - 1)],
+        help_text=(
+            "Counts changes to the published bytes that are not changes to the "
+            "run. rawdataforecaster reloads only on a strictly greater version, "
+            "so republishing one run under a changed configuration needs a term "
+            "the run does not supply — otherwise the correct new bytes sit under "
+            "the stamp the reader already holds and are never loaded. Raise it "
+            "by one and republish. It resets itself when a new run is published, "
+            "because a new run at generation 0 already outranks any generation of "
+            "the one before it."
+        ),
+    )
 
     time_until_next_hours = models.PositiveIntegerField(
         null=True,

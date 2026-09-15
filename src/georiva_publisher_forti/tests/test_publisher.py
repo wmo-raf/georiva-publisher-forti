@@ -248,6 +248,61 @@ class RepublishTests(PublishTestCase):
         self.assertGreater(second["version"], first["version"])
         self.assertEqual(int(self.sink().read_bytes(f"latest/{self.area_key}").decode()), second["version"])
 
+    def test_raising_the_generation_republishes_the_same_run_at_a_greater_stamp(self):
+        """The failure this exists to remove, end to end.
+
+        Nothing about the run has changed: same reference time, same revision,
+        same steps, same parameters. Only the publication's generation moved —
+        which is what a configuration change will move once anything is wired to
+        it. The bytes must reach the bucket under a *strictly greater* integer,
+        because ``forecast.go:293`` is what decides whether they are ever read.
+        """
+        first = publish(self.publication)
+
+        publication = self.reread()
+        publication.generation += 1
+        publication.save(update_fields=["generation"])
+        second = publish(self.reread())
+
+        self.assertFalse(second["skipped"])
+        self.assertGreater(second["version"], first["version"])
+        self.assertEqual(
+            int(self.sink().read_bytes(f"latest/{self.area_key}").decode()),
+            second["version"],
+        )
+
+    def test_the_raised_generation_leaves_a_second_version_directory(self):
+        """The pointer moving is only half of it — the bytes it names have to be
+        somewhere the reader can fetch them from."""
+        first = publish(self.publication)
+
+        publication = self.reread()
+        publication.generation += 1
+        publication.save(update_fields=["generation"])
+        second = publish(self.reread())
+
+        sink = self.sink()
+        self.assertTrue(sink.exists(f"{self.area_key}/{first['version']}/complete.json"))
+        self.assertTrue(sink.exists(f"{self.area_key}/{second['version']}/complete.json"))
+
+    def test_a_new_run_resets_the_stored_generation(self):
+        """The reset has to reach the row, not only the plan: an operator who
+        raised it to 4 and then saw a new run publish must find the field back
+        at 0, or the next raise starts from a number that names nothing."""
+        publish(self.publication)
+        publication = self.reread()
+        publication.generation = 4
+        publication.save(update_fields=["generation"])
+        publish(self.reread())
+        self.assertEqual(self.reread().generation, 4)
+
+        run = self.collection.run_ingestions.get()
+        run.revision += 1
+        run.save(update_fields=["revision"])
+        publish(self.reread())
+
+        self.assertEqual(self.reread().generation, 0)
+
     def test_a_grid_that_moved_is_refused_rather_than_published(self):
         """Every stored value is addressed by an ordinal into the point list, and
         rawdataforecaster caches its s2 index under the list's MD5."""

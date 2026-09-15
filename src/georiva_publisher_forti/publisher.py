@@ -88,6 +88,12 @@ def publish(publication, facts: dict | None = None) -> dict:
         input_fingerprint=publish_plan.fingerprint,
         grid_id=grid.identifier,
         point_count=grid.point_count,
+        # Written back because the planner may have *reset* it: a new run
+        # publishes at generation 0 whatever the field said, and a row left
+        # reading 4 while its stamp ends 00 is a row whose next hand-raise to 5
+        # names bytes that were never written. The plan is the authority here —
+        # it is the value the stamp on the bucket was built from.
+        generation=publish_plan.generation,
         published_version=publish_plan.version,
         published_reference_time=publish_plan.reference_time,
         published_step_count=publish_plan.step_count,
