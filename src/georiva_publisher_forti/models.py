@@ -19,10 +19,12 @@ answered from is now a Django query and a check on every response, not a propert
 of the storage layout; see ADR 0027's amendment in core.
 
 That also moves what the name *means*. An area used to describe a **window** —
-the live row is called ``kenya`` — and now it names a **model**: ``ecmwf-ifs``,
-with Kenya implied by the bbox. One request names exactly one area and no two are
-ever blended (D16), so what a consumer picks between is the model, and
-``FortiPublication.slug`` is the name it picks by (D17).
+the first row on the dev instance was called ``kenya`` — and now it names a
+**model**: that row is ``ecmwf-ifs``, with Kenya implied by the bbox. One request
+names exactly one area and no two are ever blended (D16), so what a consumer
+picks between is the model, and ``FortiPublication.slug`` is the name it picks by
+(D17). Renaming it is what ``rename_forti_model`` exists for and what
+``_published_under_another_slug`` otherwise refuses.
 """
 
 from django.core.exceptions import ValidationError
@@ -68,6 +70,17 @@ _RENAME_REFUSED = (
     "more, while readers keep serving the old name and the new one has nothing "
     "under it until the next run. Create a second publication instead."
 )
+
+
+def marker_path(area_key: str) -> str:
+    """The pointer a reader polls for one area, relative to the sink root.
+
+    A function as well as :meth:`FortiPublication.marker_path`, because the
+    pointer outlives the row: an operator sweeping an area key nothing owns any
+    more has the key and no publication to ask. One spelling either way — a
+    second is a second grammar, and the reader only understands one.
+    """
+    return f"latest/{area_key}"
 
 
 def instance_sink():
@@ -362,7 +375,9 @@ class FortiPublication(BuildDisciplinedModel):
 
     def marker_path(self) -> str:
         """The pointer a reader polls for this area, relative to the sink root."""
-        return f"latest/{self.area_key}"
+        # The module-level function, which is where the grammar lives; a bare
+        # name in a method body resolves to the global, not to this method.
+        return marker_path(self.area_key)
 
     # =========================================================================
     # Validation
