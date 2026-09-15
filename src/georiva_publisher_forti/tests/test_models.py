@@ -12,6 +12,13 @@ Renaming a published model is the same failure a step later: the keys already on
 the bucket carry the old slug, so the pointer nothing prunes goes on being served
 under the old name while the new one has nothing under it.
 
+A non-forecast collection is refused for a reason one step further back than
+either: only forecast collections have run boundaries at all, so nothing ever
+creates a ``RunIngestion`` for one (`ingestion/models.py`, ``record_file``). A
+publication over one is not a publication that fails — it is one that waits
+forever for a run that no ingestion will ever open, and says so in a build log
+nothing renders.
+
 Visibility replaces D12's flat refusal of anything but a public collection (D18).
 That rule's reason was about the *reader* — it holds no credential, so there is
 nobody to check a private collection against — and the gate is now the Django
@@ -25,6 +32,7 @@ from django.test import TestCase
 
 from georiva.core.models import Collection
 from georiva.core.publishing import PublicationSink
+from georiva.ingestion.models import RunIngestion
 from georiva_publisher_forti.models import MARKER_PATTERNS, SINK_ROOT, FortiPublication
 
 from .factories import make_collection, make_publication
@@ -56,6 +64,41 @@ class ValidationTests(TestCase):
             publication.full_clean()
 
         self.assertIn("collection", ctx.exception.message_dict)
+
+    def test_a_non_forecast_collection_is_refused(self):
+        """The one condition that is a hard gate rather than a readiness
+        finding: no ingestion opens a run for a collection that is not a
+        forecast, so there is nothing for this publication to ever transpose."""
+        collection = make_collection(is_forecast=False)
+        publication = make_publication(collection)
+
+        with self.assertRaises(ValidationError) as ctx:
+            publication.full_clean()
+
+        self.assertIn("collection", ctx.exception.message_dict)
+
+    def test_the_refusal_says_what_to_do_about_it(self):
+        """The failure this replaces was ``NothingToPublish: has no closed run``
+        — true, and about the run rather than the choice that caused it. The
+        refusal has to name the collection's own setting, which is the thing an
+        operator can actually change."""
+        publication = make_publication(make_collection(is_forecast=False))
+
+        with self.assertRaises(ValidationError) as ctx:
+            publication.full_clean()
+
+        (message,) = ctx.exception.message_dict["collection"]
+        self.assertIn("forecast", message.lower())
+
+    def test_a_forecast_collection_with_no_run_is_still_publishable(self):
+        """Configuring ahead of ingestion stays possible. ``is_forecast`` is
+        declarative and says nothing about whether a collection *can* publish
+        yet; everything that answers that is readiness, reported and not
+        refused."""
+        collection = make_collection()
+        self.assertFalse(RunIngestion.objects.filter(collection=collection).exists())
+
+        make_publication(collection).full_clean()
 
     def test_two_models_of_one_organisation_may_not_share_a_slug(self):
         first = make_publication(make_collection(slug="global"), slug="kenya")

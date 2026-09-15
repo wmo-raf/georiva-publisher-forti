@@ -5,6 +5,11 @@ published, the lock bookkeeping — so the form offers only the handful of field
 that are genuinely decisions: which collection, what the model is called, who may
 ask for it, how far it reaches, and whether it is on.
 
+The one decision the form *guards* is which collection: the chooser offers
+forecast collections and nothing else, for the reason
+:class:`ForecastCollectionsOnly` gives. Everything else that would stop a publish
+is diagnosis rather than a filter, and is not this form's business.
+
 The one action worth a button is a re-queue. It goes through ``queue_rebuild``
 rather than dispatching, so it shares the sweep's locking exactly and cannot take
 a publication out from under a worker that is mid-write.
@@ -42,6 +47,7 @@ known — not by widening this page's audience to the documents it cannot narrow
 import logging
 
 from django.contrib import messages
+from django.forms.models import ModelChoiceIterator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse, reverse_lazy
 from django.utils.translation import gettext_lazy as _
@@ -50,7 +56,7 @@ from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
 from wagtail.snippets.models import register_snippet
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import CreateView, EditView, SnippetViewSet
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
@@ -60,12 +66,70 @@ from .models import FortiPublication
 logger = logging.getLogger(__name__)
 
 
+class ForecastCollectionsOnly(ModelChoiceIterator):
+    """The forecast collections of whatever queryset the field ends up with.
+
+    The **offered** rows, not the **accepted** ones, and the distinction is the
+    whole design. Narrowing the field's queryset would have been shorter and
+    would have made the form answer a non-forecast id with "Select a valid
+    choice. That choice is not one of the available choices." — because a field
+    that rejects a value excludes it from model validation, so
+    :meth:`FortiPublication.clean`'s sentence would never reach the page. Leaving
+    the queryset alone keeps the two halves distinct: the dropdown is the hint,
+    and the refusal an operator reads is the model's.
+
+    It also keeps the *other* refusal honest. The same field is narrowed to the
+    active organisation by ``scope_form_fields``, and a foreign id has to be
+    turned away as absent — not told to tick a box on a collection that is
+    already a forecast and simply is not theirs.
+
+    The filter is applied per iterator rather than once, because the field builds
+    a fresh one each time its queryset is assigned: ``scope_form_fields`` runs
+    after this mixin and reassigns it, and the rebuilt iterator then filters the
+    organisation's rows rather than the instance's.
+    """
+
+    def __init__(self, field):
+        super().__init__(field)
+        self.queryset = self.queryset.filter(is_forecast=True)
+
+
+class ForecastCollectionsOnlyMixin:
+    """Offers the collection chooser only what this plugin can actually publish.
+
+    The widget half of the forecast rule; :meth:`FortiPublication.clean` is the
+    other half, and neither is sufficient alone. A filtered dropdown is a hint an
+    operator meets before choosing wrongly, and a posted id never goes near it;
+    model validation is the rule, and an operator meets it only after filling in
+    the whole form.
+    """
+
+    def get_form(self, *args, **kwargs):
+        form = super().get_form(*args, **kwargs)
+        field = form.fields["collection"]
+        field.iterator = ForecastCollectionsOnly
+        # The widget is still holding the iterator built with the field, so the
+        # new class governs nothing until the choices are rebuilt through it.
+        field.widget.choices = field.choices
+        return form
+
+
+class FortiPublicationCreateView(ForecastCollectionsOnlyMixin, CreateView):
+    pass
+
+
+class FortiPublicationEditView(ForecastCollectionsOnlyMixin, EditView):
+    pass
+
+
 class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     model = FortiPublication
     icon = "site"
     menu_label = "Forti publications"
     list_display = ["slug", "collection", "visibility", "status", "published_version", "built_at"]
     list_filter = ["status", "visibility", "is_enabled"]
+    add_view_class = FortiPublicationCreateView
+    edit_view_class = FortiPublicationEditView
     panels = [
         MultiFieldPanel(
             [

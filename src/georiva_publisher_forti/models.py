@@ -49,6 +49,18 @@ MARKER_PATTERNS = ("latest/*", "*/complete.json")
 #: third is a matter of never having offered it.
 _OPENNESS = {"public": 2, "private": 1, "internal": 0, "": 0}
 
+#: Why a collection that is not a forecast can never be published, said in terms
+#: of the setting an operator can actually change. The failure it replaces was
+#: ``NothingToPublish: has no closed run`` — true, one step downstream of the
+#: cause, and recorded in a build log nothing renders.
+NOT_A_FORECAST = (
+    "Only a forecast collection can be published. Nothing opens a run for a "
+    "collection that is not one, and a Forti model publishes one closed run at a "
+    "time — a reference time and the steps out from it — so this publication "
+    "would have nothing to transpose, ever. Tick 'Is forecast' on the collection "
+    "if that is what it holds; otherwise this is not the collection to publish."
+)
+
 _RENAME_REFUSED = (
     "This model has published as {stored!r} and cannot be renamed to {wanted!r}. "
     "The slug is a segment of every key already on the bucket: the rename would "
@@ -175,8 +187,10 @@ class FortiPublication(BuildDisciplinedModel):
         on_delete=models.CASCADE,
         related_name="forti_publication",
         help_text=(
-            "The forecast collection this model publishes. An internal collection "
-            "is refused: it is a derivation intermediate, not a dataset."
+            "The forecast collection this model publishes. A collection that is "
+            "not a forecast is refused — nothing opens a run for one, so there "
+            "would be nothing to transpose. So is an internal collection: it is "
+            "a derivation intermediate, not a dataset."
         ),
     )
 
@@ -361,7 +375,11 @@ class FortiPublication(BuildDisciplinedModel):
 
         if self.collection_id:
             collection = self.collection
-            if collection.visibility == collection.Visibility.INTERNAL:
+            # Chained ahead of the visibility pair because it is the further-back
+            # fact: a collection with no runs has nothing to be visible *of*.
+            if not collection.is_forecast:
+                errors["collection"] = NOT_A_FORECAST
+            elif collection.visibility == collection.Visibility.INTERNAL:
                 errors["collection"] = (
                     "An internal collection cannot be published. It is a derivation "
                     "intermediate read by the engine as an input — not a dataset with "

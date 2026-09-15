@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import rasterio
+from django.contrib.auth import get_user_model
 from rasterio.transform import from_origin
 
 from georiva.core.models import Asset, Catalog, Collection, Item, Unit, Variable
 from georiva.ingestion.models import RunIngestion
-from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, make_organisation
+from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, join_org, make_organisation
 from georiva_publisher_forti.models import FortiPublication
 
 REFERENCE_TIME = datetime(2026, 9, 2, 12, tzinfo=UTC)
@@ -51,13 +52,20 @@ CONSTANTS = {
 }
 
 
-def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG):
+def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG, is_forecast=True):
     """One organisation's collection, with the variables the publisher reads.
 
     ``org_slug`` is how a test asks for a *second* organisation. It matters now
     that every area shares one prefix: the tenancy questions — two organisations
     publishing the same area name, a prune that must not reach past its own key —
     cannot be asked with only one organisation in the database.
+
+    ``is_forecast`` defaults to the only thing this plugin publishes. Core's field
+    defaults to ``False``, which is right for core — most collections are
+    observations — and wrong for every fixture here: a publication over a
+    non-forecast collection is refused, so the default has to be the publishable
+    one. ``is_forecast=False`` is how a test asks for the collection that refusal
+    is about.
     """
     organisation = make_organisation(org_slug)
     catalog = Catalog.objects.create(
@@ -69,7 +77,7 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
         slug=f"ecmwf-{slug}",
         file_format="grib2",
     )
-    collection = Collection.objects.create(catalog=catalog, name="Surface", slug=slug)
+    collection = Collection.objects.create(catalog=catalog, name="Surface", slug=slug, is_forecast=is_forecast)
     if visibility is not None:
         collection.visibility = visibility
         collection.save(update_fields=["visibility"])
@@ -85,6 +93,24 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
             value_max=2000,
         )
     return collection
+
+
+def make_user(username, *, superuser, org_slug=DEFAULT_TEST_ORG_SLUG):
+    """A staff user who belongs to an organisation.
+
+    The membership is not optional decoration: without one the middleware turns a
+    signed-in stranger away before any admin view runs, so a test that forgot it
+    asserts a redirect rather than whatever it meant to.
+    """
+    user = get_user_model().objects.create_user(
+        username=username,
+        email=f"{username}@example.org",
+        password="not-a-real-password",
+        is_staff=True,
+        is_superuser=superuser,
+    )
+    join_org(user, org_slug)
+    return user
 
 
 def make_run(collection, reference_time=REFERENCE_TIME, closed=True):

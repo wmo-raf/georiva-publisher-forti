@@ -12,28 +12,15 @@ So the gate is ``is_superuser``, checked in the view and not only in the menu,
 and these tests are what stop it from quietly becoming "any admin" later.
 """
 
-from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
 
-from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, dial_org, join_org
+from georiva.organisations.testing import dial_org
 
-from .factories import make_collection, make_publication
+from .factories import make_collection, make_publication, make_user
 from .sink_isolation import TemporarySinkMixin
 
 PUBLISHED = 178835040000
-
-
-def make_user(username, *, superuser):
-    user = get_user_model().objects.create_user(
-        username=username,
-        email=f"{username}@example.org",
-        password="not-a-real-password",
-        is_staff=True,
-        is_superuser=superuser,
-    )
-    join_org(user, DEFAULT_TEST_ORG_SLUG)
-    return user
 
 
 class PanelAccessTests(TemporarySinkMixin, TestCase):
