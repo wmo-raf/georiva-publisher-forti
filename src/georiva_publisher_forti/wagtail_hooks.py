@@ -5,6 +5,12 @@ published, the lock bookkeeping — so the form offers only the handful of field
 that are genuinely decisions: which collection, what the model is called, who may
 ask for it, how far it reaches, and whether it is on.
 
+The one decision the form *guards* is which collection. Only a forecast
+collection can publish — nothing opens a run for any other kind — so the chooser
+offers those and :class:`ForecastCollectionsOnlyMixin` below says what happens to
+an id that did not come from it. Everything else that would stop a publish is
+diagnosis rather than a filter, and is not this form's business.
+
 The one action worth a button is a re-queue. It goes through ``queue_rebuild``
 rather than dispatching, so it shares the sweep's locking exactly and cannot take
 a publication out from under a worker that is mid-write.
@@ -50,14 +56,55 @@ from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
 from wagtail.snippets.models import register_snippet
-from wagtail.snippets.views.snippets import SnippetViewSet
+from wagtail.snippets.views.snippets import CreateView, EditView, SnippetViewSet
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
 from . import verification
-from .models import FortiPublication
+from .models import NOT_A_FORECAST, FortiPublication
 
 logger = logging.getLogger(__name__)
+
+
+class ForecastCollectionsOnlyMixin:
+    """Narrows the collection field to what this plugin can actually publish.
+
+    The widget half of the forecast rule; :meth:`FortiPublication.clean` is the
+    other half, and neither is sufficient alone. A filtered dropdown is a hint an
+    operator meets before choosing wrongly, and a posted id never goes near it;
+    model validation is the rule, and an operator meets it only after filling in
+    the whole form.
+
+    Narrowed on the *form instance* rather than on the form class, for two
+    reasons. Its fields are deep copies rebuilt per request, so filtering an
+    already-filtered queryset cannot accumulate; and it composes with
+    ``scope_form_fields``, which narrows the same field to the active
+    organisation from the same ``get_form`` chain. Filtering what is there is
+    what keeps both: assigning a fresh ``Collection.objects`` queryset would
+    satisfy the forecast rule and quietly hand one organisation another's
+    collections.
+
+    The invalid-choice message is replaced because Django's would otherwise be
+    the only thing a directly posted id produces. A form field that rejects a
+    value excludes it from model validation, so ``clean()``'s refusal never
+    renders on this form — and "Select a valid choice" names neither the rule nor
+    anything to do about it.
+    """
+
+    def get_form(self, *args, **kwargs):
+        form = super().get_form(*args, **kwargs)
+        field = form.fields["collection"]
+        field.queryset = field.queryset.filter(is_forecast=True)
+        field.error_messages["invalid_choice"] = NOT_A_FORECAST
+        return form
+
+
+class FortiPublicationCreateView(ForecastCollectionsOnlyMixin, CreateView):
+    pass
+
+
+class FortiPublicationEditView(ForecastCollectionsOnlyMixin, EditView):
+    pass
 
 
 class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
@@ -66,6 +113,8 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     menu_label = "Forti publications"
     list_display = ["slug", "collection", "visibility", "status", "published_version", "built_at"]
     list_filter = ["status", "visibility", "is_enabled"]
+    add_view_class = FortiPublicationCreateView
+    edit_view_class = FortiPublicationEditView
     panels = [
         MultiFieldPanel(
             [

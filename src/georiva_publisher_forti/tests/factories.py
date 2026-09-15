@@ -51,13 +51,20 @@ CONSTANTS = {
 }
 
 
-def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG):
+def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG, is_forecast=True):
     """One organisation's collection, with the variables the publisher reads.
 
     ``org_slug`` is how a test asks for a *second* organisation. It matters now
     that every area shares one prefix: the tenancy questions — two organisations
     publishing the same area name, a prune that must not reach past its own key —
     cannot be asked with only one organisation in the database.
+
+    ``is_forecast`` defaults to the only thing this plugin publishes. Core's field
+    defaults to ``False``, which is right for core — most collections are
+    observations — and wrong for every fixture here: a publication over a
+    non-forecast collection is refused, so the default has to be the publishable
+    one. ``is_forecast=False`` is how a test asks for the collection that refusal
+    is about.
     """
     organisation = make_organisation(org_slug)
     catalog = Catalog.objects.create(
@@ -69,7 +76,7 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
         slug=f"ecmwf-{slug}",
         file_format="grib2",
     )
-    collection = Collection.objects.create(catalog=catalog, name="Surface", slug=slug)
+    collection = Collection.objects.create(catalog=catalog, name="Surface", slug=slug, is_forecast=is_forecast)
     if visibility is not None:
         collection.visibility = visibility
         collection.save(update_fields=["visibility"])

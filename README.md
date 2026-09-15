@@ -158,8 +158,14 @@ since it was written. The length coincidentally matches, so its own assert passe
 
 One publication per collection, in the Wagtail admin under **Forti publications**:
 
-- **Collection** — must be `public`. A Forti reader presents no credential, so
-  there is nobody to check a restricted collection against.
+- **Collection** — must be a **forecast** collection, and the chooser offers no
+  others. Only a forecast collection has run boundaries; nothing opens a
+  `RunIngestion` for any other kind, so a publication over one would wait forever
+  for a run that never comes. The rule is in `clean()` as well as in the chooser,
+  so a posted id meets it too. An `internal` collection is refused for a
+  different reason: it is a derivation intermediate, not a dataset. `private` is
+  fine — the reader holds no credential, but the Django view in front of it does
+  know who is asking (D18).
 - **Area** — the name readers ask for, unique within the organisation. A
   *missing* `latest/<area>` reads as version **0** and sends the reader looking
   for `<area>/0/complete.json`: fatal at startup, and the error does not mention
