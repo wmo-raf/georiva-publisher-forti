@@ -28,10 +28,23 @@ picks between is the model, and ``FortiPublication.slug`` is the name it picks b
 """
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator
 from django.db import models
 
 from georiva.core.build_discipline import BuildAttemptLog, BuildDisciplinedModel
 from georiva.core.models import Collection, visible_visibilities
+
+#: How many generations fit beneath one run revision — the place value the
+#: generation occupies in the published version, and therefore also the first
+#: generation that has nowhere to go.
+#:
+#: The two are necessarily the same number, which is why this is one constant and
+#: not two. ``run.version * 100 + 100`` is exactly ``(run.version + 1) * 100``:
+#: the stamp the run's *next revision* claims at generation 0. A collision by
+#: equality is the one the reader cannot see — ``forecast.go:293`` reloads on
+#: strictly greater, so it reads the second of two identical stamps as "I already
+#: have this" — so publishing there is refused rather than wrapped.
+GENERATIONS_PER_REVISION = 100
 
 #: The one prefix every Forti publication on this instance writes into, and the
 #: whole of ``rawdataforecaster``'s ``?prefix=``. It cannot be shadowed by a
@@ -275,9 +288,15 @@ class FortiPublication(BuildDisciplinedModel):
         null=True,
         blank=True,
         editable=False,
-        help_text="ref_epoch_seconds * 100 + revision — the integer latest/<area key> holds.",
+        help_text=(
+            "run.version * 100 + generation — the integer latest/<area key> "
+            "holds. The run's own half is ref_epoch_seconds * 100 + revision, "
+            "so the whole stamp orders by model time, then by republish of that "
+            "run, then by configuration generation."
+        ),
     )
     published_reference_time = models.DateTimeField(null=True, blank=True, editable=False)
+
     published_step_count = models.PositiveIntegerField(default=0, editable=False)
     published_parameters = models.JSONField(
         default=list,
@@ -289,6 +308,32 @@ class FortiPublication(BuildDisciplinedModel):
     # =========================================================================
     # Configuration
     # =========================================================================
+
+    generation = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[
+            MaxValueValidator(
+                GENERATIONS_PER_REVISION - 1,
+                message=(
+                    "At most %(limit_value)s. The generation is the low two digits of the "
+                    "published version, so one past this is not a larger number — it is "
+                    "exactly the stamp this run claims at its next revision, and the reader "
+                    "would read the second set of bytes as one it already holds. Wait for "
+                    "the next run, which resets the generation, or publish a second model."
+                ),
+            )
+        ],
+        help_text=(
+            "Counts changes to the published bytes that are not changes to the "
+            "run. rawdataforecaster reloads only on a strictly greater version, "
+            "so republishing one run under a changed configuration needs a term "
+            "the run does not supply — otherwise the correct new bytes sit under "
+            "the stamp the reader already holds and are never loaded. Raise it "
+            "by one and republish. It resets itself when a new run is published, "
+            "because a new run at generation 0 already outranks any generation of "
+            "the one before it."
+        ),
+    )
 
     time_until_next_hours = models.PositiveIntegerField(
         null=True,
@@ -320,6 +365,38 @@ class FortiPublication(BuildDisciplinedModel):
     @property
     def bbox(self) -> tuple[float, float, float, float]:
         return (self.west, self.south, self.east, self.north)
+
+    def stored_generation_for(self, run_version: int) -> int:
+        """This row's generation as the *database* has it, reset if the run moved on.
+
+        Read from the database rather than from this instance, for the same
+        reason :meth:`_published_under_another_slug` does and on the same field:
+        the build discipline writes every transition with a queryset ``update()``,
+        so an in-memory instance's idea of ``published_version`` is routinely
+        stale by exactly the transition that matters. A stale caller here would
+        see no publish, reset to 0, and move the pointer *backwards* — which is
+        the failure this whole mechanism exists to prevent.
+
+        Which run the generation was raised against is recovered from the stamp
+        by integer division rather than kept in a column of its own. A second
+        column would be a second authority on one fact, and the two would part
+        company — most plausibly when a publish died between the two writes,
+        which is precisely when an operator is reading them to work out what
+        happened.
+
+        Rows published by an older version of this plugin hold a *run* version in
+        ``published_version``, not a publication one, so the division yields
+        roughly the reference time's epoch seconds — a number no live run's
+        version equals, and the generation resets. That is the right answer for
+        an unknown predecessor, and the new stamp is ~100x the old one, so the
+        pointer still only ever moves forwards.
+        """
+        stored = type(self).objects.filter(pk=self.pk).values("published_version", "generation").first()
+        if stored is None or stored["published_version"] is None:
+            return 0
+        if stored["published_version"] // GENERATIONS_PER_REVISION != run_version:
+            return 0
+        return stored["generation"]
 
     @property
     def effective_visibility(self) -> str:

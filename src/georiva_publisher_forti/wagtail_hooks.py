@@ -166,6 +166,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
         MultiFieldPanel(
             [
                 FieldPanel("time_until_next_hours"),
+                FieldPanel("generation"),
             ],
             heading="Advanced",
         ),

@@ -71,12 +71,27 @@ concatenated in `slice_from` order. A reader finds a value at
 `point_index × number_of_points + slice_from + step` — where `number_of_points`
 is, confusingly, *values per location*.
 
-`version` is `ref_epoch_seconds × 100 + revision`. `rawdataforecaster` reloads
-only on a **strictly greater** version (`forecast.go:147`), so a plain reference
-time would mean a corrected republish is ignored forever by every already-running
-instance while a restarting one picks it up: two instances, same version,
-different data, no error anywhere. Keying on the reference time first means a
-backfilled older run can never outrank a newer one.
+`version` is `run.version × 100 + generation`, where the run's own half is
+`ref_epoch_seconds × 100 + revision` — so the whole stamp is
+`ref_epoch_seconds × 10 000 + revision × 100 + generation`, ordered **model time,
+then republish of that run, then configuration generation**.
+
+`rawdataforecaster` reloads only on a **strictly greater** version
+(`forecast.go:293`), and each term answers a different way of being wrong about
+that. Without the **revision**, a corrected republish of one run reuses its
+integer and is ignored forever by every already-running instance while a
+restarting one picks it up: two instances, same version, different data, no error
+anywhere. Without the **generation**, the same happens to a republish under a
+changed *configuration*, which the run knows nothing about — and the verification
+panel reports published, available and loaded all equal over a real disagreement.
+Keying on the reference time first means a backfilled older run can never outrank
+a newer one.
+
+The generation resets to 0 on each new run — the term above it has moved, so a
+new run at 0 already outranks any generation of the one before it — and
+publishing at `generation = 100` is **refused** rather than wrapped, because 100
+is not a bigger number than 99 here: it is precisely the stamp the run's next
+revision claims at generation 0. See `docs/adr/0003-the-published-version-learns-about-configuration.md`.
 
 ## The three things that cost real time
 
@@ -193,6 +208,33 @@ published and already servable, so nothing a reader can observe waits on it.
 Retention keeps **5 versions per area**, count-based, and never the version
 `latest/<area>` names however old it is — an area whose feed has stopped still
 has a reader following its last good version.
+
+### Republishing one run after a configuration change
+
+A run's version cannot express "same run, different bytes", so the publication
+carries a **generation** beside it. Raise it by one and republish:
+
+```bash
+georiva shell -c "
+from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.tasks import dispatch_publish
+p = FortiPublication.objects.get(slug='ecmwf-ifs')
+p.generation += 1
+p.save(update_fields=['generation'])
+dispatch_publish(p.pk, force=True)
+"
+```
+
+The stamp on `latest/<area key>` goes up, `rawdataforecaster` sees a strictly
+greater version within 3 s and loads the new bytes without a restart. Leaving the
+generation alone and simply republishing does **not** work and does not complain:
+the bytes land under an integer the reader already holds, and the verification
+panel shows published, available and loaded in agreement over data nobody is
+serving.
+
+It resets to 0 on the next run, so it is not a running total — it counts within
+one run only. At `generation = 100` the publish is refused rather than wrapped:
+that number is the stamp the run's next revision claims.
 
 ### Renaming a published model
 

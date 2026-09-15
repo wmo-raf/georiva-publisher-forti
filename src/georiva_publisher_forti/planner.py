@@ -2,13 +2,21 @@
 
 The plan is built entirely from the database — no raster is opened — so an
 unpublishable run is refused in milliseconds rather than after 70 MB of reads.
-Three things it settles:
+Four things it settles:
 
 **Which run.** The latest *closed* ``RunIngestion``. Closed is an optimisation
 rather than a guarantee — a run reopens on any later arrival and closes again at a
 higher revision — which is exactly why the version carries the revision: a
 republish always outranks its predecessor, and a backfilled older run never
 outranks a newer one.
+
+**Which version.** ``run.version * 100 + generation``, ordered model time, then
+republish of that run, then configuration generation (D25, superseding D8). The
+run's own version answers *"which run is this?"*; a reader that reloads only on a
+strictly greater integer needs the answer to *"are these the same bytes I already
+have?"*, and the two part company the moment anything but the run can change the
+bytes. The generation is the term that moves when the run does not, and it is
+reset here rather than stored as a second authority — see :func:`_generation_for`.
 
 **Which steps.** The **intersection** across every variable the publication reads.
 Variables of one run ingest independently and really do finish at different step
@@ -30,6 +38,7 @@ from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
+from .models import GENERATIONS_PER_REVISION
 from .windows import publishable
 
 
@@ -52,13 +61,24 @@ class PublishPlan:
     publication: object
     run: object
     reference_time: datetime
-    version: int
+    run_version: int
+    generation: int
     times: list
     parameters: list
     hrefs: dict = field(default_factory=dict)
     """``{variable_slug: [href per step, in ``times`` order]}``."""
 
     time_until_next: timedelta | None = None
+
+    @property
+    def version(self) -> int:
+        """The integer ``latest/<area key>`` will hold.
+
+        Derived rather than stored so that the two halves cannot be set
+        inconsistently: everything downstream — the key prefix, the pointer, the
+        stored ``published_version`` — reads this one expression.
+        """
+        return self.run_version * GENERATIONS_PER_REVISION + self.generation
 
     @property
     def step_count(self) -> int:
@@ -68,14 +88,19 @@ class PublishPlan:
     def fingerprint(self) -> str:
         """Identity of the inputs, for the build's skip check.
 
-        The version alone is not enough: a run that reopens and closes again at
-        the same revision cannot happen, but a run whose *step count* grew while
-        the version stayed put can — a variable finishing late extends the
-        intersection. So the fingerprint covers what was actually read.
+        The run version alone is not enough in either direction. A run whose
+        *step count* grew while its version stayed put is a different publish — a
+        variable finishing late extends the intersection — so the fingerprint
+        covers what was actually read. And a *configuration* change moves none of
+        the run, the step count, the valid times or the parameter names, so
+        without the generation the skip check returns early on inputs that are
+        genuinely unchanged and the bump that was the whole point is never
+        written. That is the trap the slug rename hit in the cutover.
         """
         material = "|".join(
             [
-                str(self.version),
+                str(self.run_version),
+                str(self.generation),
                 str(self.step_count),
                 self.times[0].isoformat() if self.times else "",
                 self.times[-1].isoformat() if self.times else "",
@@ -127,12 +152,53 @@ def plan(publication) -> PublishPlan:
         publication=publication,
         run=run,
         reference_time=run.reference_time,
-        version=run.version,
+        run_version=run.version,
+        generation=_generation_for(publication, run),
         times=times,
         parameters=chosen,
         hrefs={slug: [hrefs_by_variable[slug][time] for time in times] for slug in hrefs_by_variable},
         time_until_next=_time_until_next(publication, collection, run),
     )
+
+
+def _generation_for(publication, run) -> int:
+    """The generation this publish would carry, reset if the run has moved on.
+
+    The generation counts changes to the *bytes* that are not changes to the run,
+    so it belongs to a run and not to the publication for all time. It resets
+    whenever the run being published is not the one it was last raised against —
+    and it may reset *downwards* by 99, which is safe because the term above it
+    has moved up: a new run at generation 0 outranks any generation of the run
+    before it, which is what keeps D8's model-time-first ordering intact.
+
+    What the row actually holds is :meth:`FortiPublication.stored_generation_for`'s
+    to answer — including the reset, and including reading it from the database
+    rather than from a possibly-stale instance. What is left here is the part
+    that belongs to *planning a publish*: whether the answer can be published at
+    all.
+
+    Refuses at ``GENERATIONS_PER_REVISION`` rather than wrapping. That constant is
+    not a field width: the generation occupies the same two digits the run's
+    revision would shift into, so generation 100 *is* the stamp ``revision + 1``
+    produces at generation 0. Two different sets of bytes would then claim one
+    integer, and the reader — reloading on strictly greater — would read the
+    second as one it already holds. Silent, and indistinguishable from a healthy
+    instance.
+    """
+    generation = publication.stored_generation_for(run.version)
+
+    if generation >= GENERATIONS_PER_REVISION:
+        raise PublicationRefused(
+            f"{publication.slug} is at generation {generation}, which is as many as fit "
+            f"beneath one run revision. "
+            f"The generation is the low two digits of the version, so publishing here "
+            f"would produce {run.version * GENERATIONS_PER_REVISION + generation} — the same "
+            f"integer this run claims at revision {run.revision + 1}, generation 0. The "
+            f"reader reloads only on a strictly greater version and would read the "
+            f"second set of bytes as one it already holds. Wait for the next run, which "
+            f"resets the generation, or publish a second model."
+        )
+    return generation
 
 
 def _refuse_unpublishable_collection(collection) -> None:

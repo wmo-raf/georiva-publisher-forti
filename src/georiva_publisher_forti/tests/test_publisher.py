@@ -17,6 +17,7 @@ actually stage first.
 import json
 import shutil
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ from georiva_publisher_forti import config, publisher
 from georiva_publisher_forti.models import FortiPublication
 from georiva_publisher_forti.publisher import GridMoved, publish
 
-from .factories import make_collection, make_publication, make_run, write_cogs
+from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
 from .sink_isolation import TemporarySinkMixin
 
 
@@ -247,6 +248,85 @@ class RepublishTests(PublishTestCase):
 
         self.assertGreater(second["version"], first["version"])
         self.assertEqual(int(self.sink().read_bytes(f"latest/{self.area_key}").decode()), second["version"])
+
+    def _republish_at_next_generation(self):
+        """Raise the generation by one and publish the same run again.
+
+        The two-step an operator performs, and the whole of what #9 makes
+        possible: nothing about the run has moved — same reference time, same
+        revision, same steps, same parameters — so the generation is the only
+        thing that can carry the new bytes past the reader's strictly-greater
+        test.
+        """
+        publication = self.reread()
+        publication.generation += 1
+        publication.save(update_fields=["generation"])
+        publication.mark_stale()
+        return publish(self.reread())
+
+    def test_raising_the_generation_republishes_the_same_run_at_a_greater_stamp(self):
+        """The failure this exists to remove, end to end.
+
+        The bytes must reach the bucket under a *strictly greater* integer,
+        because ``forecast.go:293`` is what decides whether they are ever read.
+        """
+        first = publish(self.publication)
+
+        second = self._republish_at_next_generation()
+
+        self.assertFalse(second["skipped"])
+        self.assertGreater(second["version"], first["version"])
+        self.assertEqual(
+            int(self.sink().read_bytes(f"latest/{self.area_key}").decode()),
+            second["version"],
+        )
+
+    def test_the_raised_generation_leaves_a_second_version_directory(self):
+        """The pointer moving is only half of it — the bytes it names have to be
+        somewhere the reader can fetch them from."""
+        first = publish(self.publication)
+
+        second = self._republish_at_next_generation()
+
+        sink = self.sink()
+        self.assertTrue(sink.exists(f"{self.area_key}/{first['version']}/complete.json"))
+        self.assertTrue(sink.exists(f"{self.area_key}/{second['version']}/complete.json"))
+
+    def test_a_new_run_resets_the_stored_generation(self):
+        """The reset has to reach the row, not only the plan: an operator who
+        raised it to 1 and then saw a new run publish must find the field back
+        at 0, or the next raise starts from a number that names nothing.
+
+        A genuinely later reference time, not a revision bump — ADR 0003 counts
+        those as different things, and only this one is "a new run".
+        """
+        publish(self.publication)
+        self._republish_at_next_generation()
+        self.assertEqual(self.reread().generation, 1)
+
+        later = REFERENCE_TIME + timedelta(hours=12)
+        write_cogs(self.collection, self.cogs, step_hours=3, steps=9, reference_time=later)
+        make_run(self.collection, reference_time=later)
+        self.publication.mark_stale()
+        publish(self.reread())
+
+        self.assertEqual(self.reread().published_reference_time, later)
+        self.assertEqual(self.reread().generation, 0)
+
+    def test_a_republished_run_also_resets_the_stored_generation(self):
+        """A reopened run is not the run the generation was raised against
+        either: the revision above it has moved, so generation 0 already
+        outranks whatever it had reached."""
+        publish(self.publication)
+        self._republish_at_next_generation()
+
+        run = self.collection.run_ingestions.get()
+        run.revision += 1
+        run.save(update_fields=["revision"])
+        self.publication.mark_stale()
+        publish(self.reread())
+
+        self.assertEqual(self.reread().generation, 0)
 
     def test_a_grid_that_moved_is_refused_rather_than_published(self):
         """Every stored value is addressed by an ordinal into the point list, and
