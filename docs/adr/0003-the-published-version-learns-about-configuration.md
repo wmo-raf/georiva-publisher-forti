@@ -79,6 +79,16 @@ one fact, and the two would part company — most plausibly when a publish died
 between the two writes, which is precisely the moment an operator is reading them
 to work out what happened.
 
+`FortiPublication.stored_generation_for(run_version)` owns both the division and
+the reset, and reads the row from the **database** rather than from the instance
+in hand. That is not fastidiousness: `_published_under_another_slug` already
+documents, on this same field, that "the build discipline writes every transition
+with a queryset `update()`, so an in-memory instance's idea of
+`published_version` is routinely stale by exactly the transition that matters". A
+stale caller here would see no publish, reset to 0, and move the pointer
+*backwards* — the failure this mechanism exists to prevent, arrived at from the
+inside. A planner test holds an instance across a publish and asserts it.
+
 ### The ceiling is refused, not wrapped
 
 `GENERATION_CEILING = 100`, and publishing there raises `PublicationRefused`.
@@ -150,6 +160,16 @@ is worth watching for one thing specifically: the live row still holds an
 old-scale `published_version` (`178925760000`), so that publish is the upgrade
 path above. Its pointer should land on `17892576000000` — a hundredfold jump, the
 generation reset to 0, and the reader loading it within 3 s.
+
+**The generation is the only configuration the fingerprint sees.** It is a
+manual proxy for "something about this publication changed", not a derived hash
+of the publication's fields, so editing `time_until_next_hours` and republishing
+still skips as up to date. The extent is the one configuration field already
+guarded independently — a changed bbox moves the point list, and `GridMoved`
+refuses the publish outright rather than skipping it. Making a configuration edit
+bump the generation by itself is #7's, alongside the chooser and the editable
+variable mapping that define which edits count; doing it here would have meant
+guessing that list before it exists.
 
 **Raising the generation does not by itself schedule a publish.** The field is
 configuration; `mark_stale()` is what makes the sweep pick a row up, exactly as

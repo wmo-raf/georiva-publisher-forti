@@ -38,7 +38,7 @@ from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
-from .models import GENERATION_CEILING
+from .models import GENERATIONS_PER_REVISION
 from .windows import publishable
 
 
@@ -78,7 +78,7 @@ class PublishPlan:
         inconsistently: everything downstream — the key prefix, the pointer, the
         stored ``published_version`` — reads this one expression.
         """
-        return self.run_version * GENERATION_CEILING + self.generation
+        return self.run_version * GENERATIONS_PER_REVISION + self.generation
 
     @property
     def step_count(self) -> int:
@@ -171,28 +171,28 @@ def _generation_for(publication, run) -> int:
     has moved up: a new run at generation 0 outranks any generation of the run
     before it, which is what keeps D8's model-time-first ordering intact.
 
-    Which run it was raised against is read back out of ``published_version``
-    rather than kept in a column of its own. A second column would be a second
-    authority on one fact, and the pair would eventually disagree — most likely
-    at exactly the moment a publish died between the two writes.
+    What the row actually holds is :meth:`FortiPublication.stored_generation_for`'s
+    to answer — including the reset, and including reading it from the database
+    rather than from a possibly-stale instance. What is left here is the part
+    that belongs to *planning a publish*: whether the answer can be published at
+    all.
 
-    Refuses at the ceiling rather than wrapping. ``GENERATION_CEILING`` is not a
-    field width: the generation occupies the same two digits the run's revision
-    would shift into, so generation 100 *is* the stamp ``revision + 1`` produces
-    at generation 0. Two different sets of bytes would then claim one integer,
-    and the reader — reloading on strictly greater — would read the second as one
-    it already holds. Silent, and indistinguishable from a healthy instance.
+    Refuses at ``GENERATIONS_PER_REVISION`` rather than wrapping. That constant is
+    not a field width: the generation occupies the same two digits the run's
+    revision would shift into, so generation 100 *is* the stamp ``revision + 1``
+    produces at generation 0. Two different sets of bytes would then claim one
+    integer, and the reader — reloading on strictly greater — would read the
+    second as one it already holds. Silent, and indistinguishable from a healthy
+    instance.
     """
-    if publication.published_run_version == run.version:
-        generation = publication.generation
-    else:
-        generation = 0
+    generation = publication.stored_generation_for(run.version)
 
-    if generation >= GENERATION_CEILING:
+    if generation >= GENERATIONS_PER_REVISION:
         raise PublicationRefused(
-            f"{publication.slug} is at generation {generation}, which is the ceiling. "
+            f"{publication.slug} is at generation {generation}, which is as many as fit "
+            f"beneath one run revision. "
             f"The generation is the low two digits of the version, so publishing here "
-            f"would produce {run.version * GENERATION_CEILING + generation} — the same "
+            f"would produce {run.version * GENERATIONS_PER_REVISION + generation} — the same "
             f"integer this run claims at revision {run.revision + 1}, generation 0. The "
             f"reader reloads only on a strictly greater version and would read the "
             f"second set of bytes as one it already holds. Wait for the next run, which "

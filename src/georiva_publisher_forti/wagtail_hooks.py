@@ -169,14 +169,6 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                 FieldPanel("generation"),
             ],
             heading="Advanced",
-            help_text=(
-                "The generation is what makes a reader load a republish of a run "
-                "it has already loaded. Raise it by one whenever something other "
-                "than the run changes what this model should publish, then "
-                "republish: without it the new bytes land under the stamp the "
-                "reader already holds and are never read, and nothing reports "
-                "that. It counts within one run and resets itself on the next."
-            ),
         ),
         FieldPanel("status", read_only=True),
         FieldPanel("error", read_only=True),

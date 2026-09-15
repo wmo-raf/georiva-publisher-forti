@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 from django.test import TestCase
 
 from georiva.core.models import Collection, Unit
-from georiva_publisher_forti.models import GENERATION_CEILING, FortiPublication
+from georiva_publisher_forti.models import GENERATIONS_PER_REVISION, FortiPublication
 from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
 
 from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
@@ -71,7 +71,9 @@ class RunSelectionTests(PlannerTestCase):
         self.assertGreater(plan(self.publication).version, first)
 
     def test_a_backfilled_older_run_never_outranks_a_newer_one(self):
-        """``ref_epoch * 100`` leads, so the revision can only break ties."""
+        """``ref_epoch * 100`` leads *within the run version*, so the revision
+        can only break ties. D25 multiplies this whole number by 100 again and
+        adds the generation below it, which preserves the ordering exactly."""
         older = REFERENCE_TIME - timedelta(hours=12)
         write_cogs(self.collection, self.path, reference_time=older)
         old_run = make_run(self.collection, reference_time=older)
@@ -237,6 +239,8 @@ class GenerationTests(PlannerTestCase):
         """
         publish_plan = plan(self.publication)
         FortiPublication.objects.filter(pk=self.publication.pk).update(
+            status=FortiPublication.Status.READY,
+            input_fingerprint=publish_plan.fingerprint,
             published_version=publish_plan.version,
             generation=publish_plan.generation,
         )
@@ -252,7 +256,7 @@ class GenerationTests(PlannerTestCase):
 
         self.assertEqual(publish_plan.run_version, self.run.version)
         self.assertEqual(publish_plan.generation, 0)
-        self.assertEqual(publish_plan.version, self.run.version * GENERATION_CEILING)
+        self.assertEqual(publish_plan.version, self.run.version * GENERATIONS_PER_REVISION)
 
     def test_raising_the_generation_raises_the_version(self):
         first = self._publish().version
@@ -264,7 +268,7 @@ class GenerationTests(PlannerTestCase):
     def test_a_new_run_outranks_any_generation_of_the_one_before_it(self):
         """Model time dominates, which is what D8 required and this preserves."""
         self._publish()
-        self._raise_generation(GENERATION_CEILING - 1)
+        self._raise_generation(GENERATIONS_PER_REVISION - 1)
         highest = self._publish().version
 
         later = REFERENCE_TIME + timedelta(hours=12)
@@ -277,7 +281,7 @@ class GenerationTests(PlannerTestCase):
         """Run republish sits between model time and configuration: a reopened
         run at generation 0 beats the same run's highest generation."""
         self._publish()
-        self._raise_generation(GENERATION_CEILING - 1)
+        self._raise_generation(GENERATIONS_PER_REVISION - 1)
         highest = self._publish().version
 
         self.run.revision += 1
@@ -313,13 +317,30 @@ class GenerationTests(PlannerTestCase):
 
         self.assertEqual(plan(self.publication).generation, 0)
 
+    def test_a_stale_instance_does_not_reset_the_generation(self):
+        """The generation is read from the row, not from the caller's copy.
+
+        The build discipline writes every transition with a queryset
+        ``update()``, so an instance held across one is stale by exactly the
+        write that matters. A stale copy here reads "never published", resets to
+        0, and moves the pointer *backwards* — the failure the whole mechanism
+        exists to prevent.
+        """
+        stale = FortiPublication.objects.get(pk=self.publication.pk)
+        self._publish()
+        self._raise_generation(4)
+
+        self.assertIsNone(stale.published_version)
+        self.assertEqual(stale.generation, 0)
+        self.assertEqual(plan(stale).generation, 4)
+
     def test_publishing_at_the_ceiling_is_refused_rather_than_wrapping(self):
         """A wrapped generation is not a smaller number — it is exactly the
         stamp the run's next revision would produce, which the reader reads as
         "I already have this"."""
         FortiPublication.objects.filter(pk=self.publication.pk).update(
             published_version=plan(self.publication).version,
-            generation=GENERATION_CEILING,
+            generation=GENERATIONS_PER_REVISION,
         )
         self.publication.refresh_from_db()
 
@@ -331,8 +352,8 @@ class GenerationTests(PlannerTestCase):
     def test_the_ceiling_is_the_stamp_the_next_revision_claims(self):
         """The arithmetic the refusal exists for, asserted rather than trusted:
         this is a collision by *equality*, which strictly-greater cannot see."""
-        wrapped = self.run.version * GENERATION_CEILING + GENERATION_CEILING
-        next_revision = (self.run.version + 1) * GENERATION_CEILING
+        wrapped = self.run.version * GENERATIONS_PER_REVISION + GENERATIONS_PER_REVISION
+        next_revision = (self.run.version + 1) * GENERATIONS_PER_REVISION
 
         self.assertEqual(wrapped, next_revision)
 
@@ -347,11 +368,25 @@ class GenerationTests(PlannerTestCase):
 
         self.assertNotEqual(plan(self.publication).fingerprint, before)
 
-    def test_the_fingerprint_is_unmoved_by_anything_that_did_not_change(self):
-        """The other half of the criterion. A fingerprint that changed on every
-        plan would never skip, and the skip is what stops the sweep republishing
-        an unchanged run every five minutes."""
+    def test_an_unchanged_publication_still_skips(self):
+        """The other half of the criterion, and the half a fingerprint that
+        changed on every plan would fail.
+
+        Asserted through ``is_up_to_date`` rather than by comparing two plans to
+        each other: what has to hold is that the fingerprint matches the one the
+        *last publish stored*, because that comparison is the skip. Two plans
+        agreeing with each other proves only that ``plan()`` is deterministic,
+        which no bug in this ticket could have broken — and the sweep republishing
+        an unchanged run every five minutes is what the skip prevents."""
         self._publish()
+
+        self.assertTrue(self.publication.is_up_to_date(plan(self.publication).fingerprint))
+
+    def test_a_raised_generation_stops_it_skipping(self):
+        """The same assertion from the other side: the skip must *not* hold once
+        the generation has moved, or the bump is never written."""
+        self._publish()
+
         self._raise_generation(1)
 
-        self.assertEqual(plan(self.publication).fingerprint, plan(self.publication).fingerprint)
+        self.assertFalse(self.publication.is_up_to_date(plan(self.publication).fingerprint))
