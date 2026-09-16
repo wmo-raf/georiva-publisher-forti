@@ -1,0 +1,20 @@
+{% load i18n %}
+{% comment %}
+    One publication's answer to "is my model actually being served", from the
+    one status read the whole listing shares.
+
+    The word carries the state and the colour only emphasises it, because a
+    table cell has no {% block extra_css %} and a plugin has no business adding
+    global admin CSS to colour six words. "Could not read" and "not yet" are
+    therefore different words as well as different colours — collapsing them
+    reports an outage as an instance that has simply not cut over.
+
+    The version is printed unlocalised, from `figure`: it is an identifier that
+    happens to be spelled in digits, compared by eye against the published
+    version in the cell beside it and against a path on the bucket, so a
+    thousands separator would make the page disagree with both.
+{% endcomment %}
+<td {% if column.classname %}class="{{ column.classname }}"{% endif %}>
+    <span class="w-status {{ value.badge_class }}" title="{{ value.detail }}">{{ value.badge_label }}</span>
+    {% if value.figure %}<span title="{{ value.detail }}">{{ value.figure }}</span>{% endif %}
+</td>

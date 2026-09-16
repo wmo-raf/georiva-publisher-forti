@@ -12,15 +12,23 @@ So the gate is ``is_superuser``, checked in the view and not only in the menu,
 and these tests are what stop it from quietly becoming "any admin" later.
 """
 
-from django.test import TestCase
+import time
+from unittest.mock import patch
+
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from georiva.organisations.testing import dial_org
+from georiva_publisher_forti.models import FortiPublication
 
-from .factories import make_collection, make_publication, make_user
+from .factories import make_collection, make_org_admin, make_publication, make_user
 from .sink_isolation import TemporarySinkMixin
 
 PUBLISHED = 178835040000
+
+#: One run older, so a reader holding it disagrees with what the database says
+#: was published — the state the column exists to make visible.
+BEHIND = 178813440000
 
 
 class PanelAccessTests(TemporarySinkMixin, TestCase):
@@ -125,3 +133,204 @@ class PanelRenderTests(TemporarySinkMixin, TestCase):
         body = self.client.get(self.url).content.decode()
 
         self.assertNotIn("<form", body.lower())
+
+
+class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
+    """The repair the panel's docstring names, on the surface it names.
+
+    An area row narrows safely to one organisation and a configuration digest
+    does not, which is the whole reason this can be an organisation
+    administrator's column while the page above stays the instance admin's. The
+    distinctions have to survive the narrowing: a document that could not be
+    read is not a document that is not there, and a listing that collapsed them
+    would report an outage as an instance that has not cut over.
+    """
+
+    def setUp(self):
+        self.isolate_sink()
+        dial_org(self.client)
+        self.publication = make_publication(
+            make_collection(),
+            slug="ecmwf-ifs",
+            published_version=PUBLISHED,
+            point_count=1920,
+            published_step_count=15,
+            published_parameters=["air_temperature_2m"],
+        )
+        self.area = self.publication.area_key
+        self.url = reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list")
+
+    def sign_in(self, user=None):
+        self.client.force_login(user or make_org_admin("org-admin"))
+
+    def write_forecaster(self, areas):
+        import json
+
+        from georiva_publisher_forti import verification
+        from georiva_publisher_forti.models import instance_sink
+
+        instance_sink().write(
+            verification.RAWDATAFORECASTER_STATUS_PATH,
+            json.dumps(
+                {
+                    "module": "rawdataforecaster",
+                    "loaded_sha": "f" * 64,
+                    "loaded_at": "2026-09-13T09:00:00Z",
+                    "ok": True,
+                    "state": {"areas": areas},
+                }
+            ).encode("utf-8"),
+        )
+
+    def test_the_resident_version_is_shown_beside_the_published_one(self):
+        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, str(PUBLISHED))
+        self.assertContains(response, "agrees")
+
+    def test_a_resident_version_behind_the_published_one_is_told_apart_from_agreement(self):
+        """Published and resident become two facts rather than one assumed to
+        imply the other, which is the whole point of the column."""
+        self.write_forecaster([{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "differs")
+        self.assertNotContains(response, "agrees")
+
+    def test_an_organisation_administrator_sees_it_for_their_own_publications(self):
+        """No superuser anywhere in this test. The audience is the operator who
+        runs one organisation's models, and the panel above turns them away."""
+        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "agrees")
+        self.assertNotEqual(self.client.get(reverse("forti_verification_panel")).status_code, 200)
+
+    def test_another_organisations_residency_does_not_reach_this_listing(self):
+        """The status document names every organisation's areas — one process
+        serves all of them — so what is read is instance-wide and only what is
+        *rendered* narrows. The other organisation's area is given a version of
+        its own, so a leak would be a number on the page rather than a row
+        somebody has to notice is extra.
+        """
+        theirs = make_publication(
+            make_collection(slug="gfs-surface", org_slug="other-org"),
+            slug="gfs",
+            published_version=BEHIND,
+        )
+        self.write_forecaster(
+            [
+                {"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED},
+                {"area": theirs.area_key, "available": BEHIND, "loaded": BEHIND},
+            ]
+        )
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, str(PUBLISHED))
+        self.assertNotContains(response, str(BEHIND))
+        self.assertNotContains(response, theirs.slug)
+
+    def test_an_unreadable_status_document_says_so_rather_than_nothing_yet(self):
+        """Collapsing these reports an outage as an instance that has not cut
+        over — which is exactly the state this instance is in, so the conflation
+        would be invisible for as long as it mattered."""
+        from georiva_publisher_forti.models import instance_sink
+
+        self.sign_in()
+        sink = instance_sink()
+
+        with patch.object(type(sink), "exists", side_effect=OSError("connection refused")):
+            response = self.client.get(self.url)
+
+        self.assertContains(response, "could not read")
+        self.assertNotContains(response, "not yet")
+
+    def test_a_publication_that_has_never_published_is_nothing_yet(self):
+        self.publication.published_version = None
+        self.publication.save(update_fields=["published_version"])
+        self.write_forecaster([])
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "not yet")
+        self.assertNotContains(response, "could not read")
+
+    def test_every_row_is_served_by_one_status_read(self):
+        """The document lists every area at once. A read per row would put the
+        deadline on the page rather than on the read, and a listing of twenty
+        models would be twenty round trips to object storage."""
+        from georiva_publisher_forti.models import instance_sink
+
+        for n in range(4):
+            make_publication(make_collection(slug=f"model-{n}"), slug=f"m{n}", published_version=PUBLISHED)
+        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        self.sign_in()
+        sink = instance_sink()
+
+        with patch.object(type(sink), "read_json", wraps=sink.read_json) as read_json:
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(read_json.call_count, 1)
+
+    def test_the_listing_renders_when_object_storage_does_not_answer(self):
+        """One worker thread, one deadline, abandoned rather than waited on. The
+        alternative is an admin page holding a worker through botocore's retry
+        ladder, which is minutes, five times over."""
+        from georiva_publisher_forti import verification
+
+        def slow(sink, path, module):
+            time.sleep(3.0)
+
+        self.sign_in()
+        began = time.monotonic()
+        with (
+            patch.object(verification, "read_status", slow),
+            override_settings(GEORIVA_FORTI_VERIFICATION_DEADLINE=0.1),
+        ):
+            response = self.client.get(self.url)
+        elapsed = time.monotonic() - began
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "could not read")
+        self.assertLess(elapsed, 2.0)
+
+    def test_a_listing_with_no_rows_does_not_touch_object_storage(self):
+        """The reading is made when the first cell asks and not before, so a
+        fresh organisation renders its empty table without a round trip."""
+        from georiva_publisher_forti.models import instance_sink
+
+        FortiPublication.objects.all().delete()
+        self.sign_in()
+        sink = instance_sink()
+
+        with patch.object(type(sink), "exists", wraps=sink.exists) as exists:
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(exists.call_count, 0)
+
+    def test_the_reading_does_not_outlive_the_request_that_made_it(self):
+        """The trap the column is shaped around. The reading is cached on the
+        column and the column is built per request — declared in ``list_display``
+        it would be built once at import, and every request for the life of the
+        process would be answered with the first one's reading."""
+        self.write_forecaster([{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
+        self.sign_in()
+
+        self.assertContains(self.client.get(self.url), "differs")
+        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+
+        self.assertContains(self.client.get(self.url), "agrees")
