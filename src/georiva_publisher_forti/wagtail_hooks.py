@@ -137,10 +137,9 @@ class ResidencyColumn(Column):
 
     **Narrowed by construction.** :meth:`~.verification.ResidentAreas.of` takes
     the publication whose row is being rendered, so a cell can only ever ask
-    about the area it already holds. That is what makes this an organisation
-    administrator's column while the panel stays the instance admin's page: an
-    area row is one key, one version and one organisation, where a configuration
-    sha describes one document governing every tenant and narrows to nobody.
+    about the area it already holds — there is no call shape here that returns
+    somebody else's row. Why that is safe on a page the panel is not is argued
+    once, in this module's docstring.
     """
 
     cell_template_name = "georiva_publisher_forti/tables/residency_cell.html"

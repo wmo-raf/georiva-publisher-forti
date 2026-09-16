@@ -14,7 +14,6 @@ of the ones that matter are true of this instance today:
   apart, which is the whole of M5.1's first fix.
 """
 
-import json
 import threading
 import time
 from unittest.mock import patch
@@ -27,9 +26,14 @@ from georiva_publisher_forti.verification import FOREIGN, REFUSED, WITHHELD
 
 from .factories import make_collection, make_publication
 from .sink_isolation import TemporarySinkMixin
+from .status_documents import write_forecaster, write_status
 
 PUBLISHED = 178835040000
 LATER = 178856640000
+
+#: A store listing error that names another organisation's key, because that is
+#: what the Go side puts in one: the message quotes the object it choked on.
+FOREIGN_KEY_IN_STORE_ERROR = "listing _forti/latest/: unparseable key other-org.gfs/1/x"
 
 RAWDATAFORECASTER = "rawdataforecaster.json"
 JSONFORMAT = "jsonformat.json"
@@ -61,7 +65,7 @@ class PanelTestCase(TemporarySinkMixin, TestCase):
         return config.intended()[path]
 
     def write_status(self, path, payload):
-        self.sink().write(path, json.dumps(payload).encode("utf-8"))
+        write_status(path, payload)
 
     def write_sidecar(self, volume, **overrides):
         payload = {
@@ -76,20 +80,8 @@ class PanelTestCase(TemporarySinkMixin, TestCase):
         payload.update(overrides)
         self.write_status(verification.SIDECAR_PATH, payload)
 
-    def write_forecaster(self, loaded_sha, *, areas=None, store_error=None, ok=True, errors=None):
-        state = {"areas": areas if areas is not None else []}
-        if store_error:
-            state["store_error"] = store_error
-        payload = {
-            "module": "rawdataforecaster",
-            "loaded_sha": loaded_sha,
-            "loaded_at": "2026-09-13T09:00:10Z",
-            "ok": ok,
-            "state": state,
-        }
-        if errors:
-            payload["errors"] = errors
-        self.write_status(verification.RAWDATAFORECASTER_STATUS_PATH, payload)
+    def write_forecaster(self, loaded_sha, **kwargs):
+        write_forecaster(loaded_sha, **kwargs)
 
     def chain(self, report, document=RAWDATAFORECASTER):
         return next(chain for chain in report.chains if chain.document == document)
@@ -539,13 +531,18 @@ class ResidencyTests(PanelTestCase):
         self.assertEqual(residency.badge, ABSENT)
         self.assertEqual(residency.badge_label, "not yet")
 
-    def test_no_status_document_is_nothing_yet_rather_than_could_not_read(self):
-        """The pair has never been started against this bucket, which is an
-        ordinary first state and not an outage."""
+    def test_no_status_document_is_the_readers_silence_not_the_publications(self):
+        """Three states are ``ABSENT`` from Django's side and they are three
+        different afternoons: nothing was ever written (the pair has never been
+        started here), the read failed, and this model has simply never
+        published. The first is the reader's silence and gets its own word —
+        otherwise an operator goes looking at their own publication for a
+        process that is not running."""
         residency = self.residency()
 
         self.assertEqual(residency.presence, ABSENT)
-        self.assertEqual(residency.badge_label, "not yet")
+        self.assertEqual(residency.badge_label, "no reader")
+        self.assertIn("never written a status file", residency.detail)
 
     def test_a_failing_read_is_could_not_read_rather_than_nothing_yet(self):
         """Collapsing these two reports an outage as an instance that has not
@@ -593,13 +590,29 @@ class ResidencyTests(PanelTestCase):
         self.write_forecaster(
             self.sha,
             areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}],
-            store_error="listing _forti/latest/: unparseable key",
+            store_error=FOREIGN_KEY_IN_STORE_ERROR,
         )
 
         residency = self.residency()
 
         self.assertIn("unknown", residency.detail)
-        self.assertIn("unparseable key", residency.detail)
+        self.assertIn("listing", residency.detail)
+
+    def test_the_readers_store_error_is_not_quoted_to_an_organisation(self):
+        """The error is the reader's own and instance-wide, and it quotes the
+        key it choked on — which can belong to somebody else. An area row
+        narrows; the sentence beside it has to narrow with it, or the narrowing
+        is only as good as whatever the Go side happened to put in a string."""
+        self.write_forecaster(
+            self.sha,
+            areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}],
+            store_error=FOREIGN_KEY_IN_STORE_ERROR,
+        )
+
+        residency = self.residency()
+
+        self.assertNotIn("other-org", residency.detail)
+        self.assertNotIn("unparseable", residency.detail)
 
     def test_a_row_only_ever_answers_about_its_own_area(self):
         """The narrowing, structurally rather than by filtering: the caller hands

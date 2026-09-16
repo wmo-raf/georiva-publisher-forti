@@ -110,6 +110,14 @@ REFUSED = "refused"
 #: resident" about a process that was never asked.
 UNREPORTED = "unreported"
 
+#: Areas only, and a badge rather than a presence: **nothing has written a
+#: status file at all**. The document's absence and the publication's are both
+#: :data:`~.config.ABSENT` from Django's side and are not the same afternoon —
+#: one is a process that is not reporting, the other a model that has not
+#: published yet — so a listing that gave them one word would send an operator
+#: to look at their own publication for a reader that is not running.
+NO_READER = "no reader"
+
 #: Why an area GeoRiva publishes is missing from the reader's list, said once for
 #: both surfaces that say it. The panel reaches it by set difference over every
 #: configured area; :meth:`ResidentAreas.of` reaches it one publication at a
@@ -126,6 +134,13 @@ NO_AREA_STATE = (
     "This rawdataforecaster reports no state. M5.1's second fix — the status file listing resident "
     "areas — is not in the image that is running, so a config that parsed is all this instance can prove."
 )
+
+#: What a *publication's* row says when the reader cannot list the store. The
+#: error itself is the reader's own and instance-wide, and it quotes the key it
+#: choked on — which can belong to another organisation. So the row an
+#: organisation administrator reads says *that* the listing is failing and the
+#: panel, which is the instance admin's, says what it said.
+LISTING_IS_FAILING = "its listing of _forti/latest/ is failing, which the instance admin's Forti serving panel reports"
 
 #: Where each process leaves its status. ``configwatch`` writes
 #: ``<status-dir>/<module>.json`` (`configwatch.go:217`) and the sidecar copies
@@ -202,6 +217,7 @@ _BADGE_LABELS = {
     FOREIGN: "not this document",
     REFUSED: "refused",
     UNREPORTED: "cannot say",
+    NO_READER: "no reader",
 }
 
 
@@ -290,6 +306,7 @@ _RESIDENCY_CLASSES = {
     "agrees": "w-text-positive-100",
     "differs": "w-text-critical-200",
     ABSENT: "w-text-grey-400",
+    NO_READER: "w-text-warning-100",
     UNREACHABLE: "w-text-warning-100",
     FOREIGN: "w-text-critical-200",
     UNREPORTED: "w-text-grey-400",
@@ -345,6 +362,10 @@ class Residency:
         working it out with ``{% if %}`` would be a second place the states are
         written down, and the place nobody tests.
         """
+        if self.presence == ABSENT:
+            # The *document's* absence, which is the reader's silence and not
+            # this publication's. See :data:`NO_READER`.
+            return NO_READER
         if self.presence != PRESENT:
             return self.presence
         if self.ok is None:
@@ -415,7 +436,8 @@ class ResidentAreas:
             return Residency(area, published, presence=PRESENT, ok=False, detail=NOT_IN_THE_AREA_LIST)
 
         available, loaded = entry
-        detail, ok = _area_verdict(published, available, loaded, self.store_error)
+        # The phrase, never the error. See :data:`LISTING_IS_FAILING`.
+        detail, ok = _area_verdict(published, available, loaded, LISTING_IS_FAILING if self.store_error else "")
         if published is None and available is None and loaded is None:
             # The panel calls this row a fault, and is right to: an area the
             # reader is *configured* with and holding nothing is one it was told
@@ -606,11 +628,6 @@ def _guarded(read, deadline: float):
         return None
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
-
-
-def _readings(sink, deadline: float):
-    """Every document the panel needs, or ``None`` if the bucket did not answer."""
-    return _guarded(lambda: _read_all(sink), deadline)
 
 
 # =============================================================================
@@ -1002,6 +1019,12 @@ def _reported_areas(state):
     ``None`` is a third answer and not an empty list: a process that reports no
     state has said nothing about any area, while one reporting an empty list has
     said it holds none. See :data:`UNREPORTED`.
+
+    Keyed by area, so a document listing one area twice yields the **last**
+    entry rather than two rows. An area is the unit this whole plugin publishes
+    and the reader selects by, so two rows under one key is a malformed document
+    either way — and one row that might be stale beats two that disagree with
+    each other beside a verdict that can only be about one of them.
     """
     if not isinstance(state, dict):
         return None
@@ -1103,10 +1126,16 @@ def resident_areas(*, sink=None, deadline: float | None = None) -> ResidentAreas
     )
     if reading is None:
         return ResidentAreas(UNREACHABLE, detail=f"The bucket did not answer within {deadline:g} s.")
-    if reading.presence != PRESENT:
+    if reading.presence == ABSENT:
         # ``_module`` is what turns "no document" into the sentence an operator
-        # reads on the panel, and this must not be a second wording of it.
-        return ResidentAreas(reading.presence, detail=_module(RAWDATAFORECASTER_MODULE, reading).detail)
+        # reads on the panel, and this must not be a second wording of it. Only
+        # this branch may reach it: that sentence asserts nothing was ever
+        # written, which is a claim a read that *failed* has not earned — and
+        # "could not read" over a tooltip saying "never written" is the exact
+        # conflation the presences exist to prevent.
+        return ResidentAreas(ABSENT, detail=_module(RAWDATAFORECASTER_MODULE, reading).detail)
+    if reading.presence != PRESENT:
+        return ResidentAreas(reading.presence, detail=reading.detail)
 
     state = reading.payload.get("state")
     reported = _reported_areas(state)
@@ -1135,7 +1164,7 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
     publications = config.publications_to_serve()
     intended = config.intended(publications)
 
-    readings = _readings(sink, deadline)
+    readings = _guarded(lambda: _read_all(sink), deadline)
     answered = readings is not None
     if readings is None:
         timed_out = f"The bucket did not answer within {deadline:g} s."

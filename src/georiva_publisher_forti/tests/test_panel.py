@@ -1,15 +1,24 @@
-"""Who may open the panel, and that it renders in the state this instance is in.
+"""The two surfaces that read the serving plane, and who may read each.
 
-The access rule is the sharp one and the reason is worth restating where it is
-tested: every figure on the page is instance-wide. ``rawdataforecaster.json``
-names every organisation's area keys, one sha describes one document governing
-every tenant, and the two status files describe one process serving all of them.
-A page rendered inside one organisation's admin that showed all of it would hand
-``ke-kmd.ecmwf-ifs`` to another organisation's administrator — which is precisely
-what M5.6 spent D18 making impossible on the public plane.
+One document, two audiences, and the difference between them is the subject of
+this module. The **panel** renders every figure the instance has:
+``rawdataforecaster.json`` names every organisation's area keys, one sha
+describes one document governing every tenant, and the two status files describe
+one process serving all of them. A page rendered inside one organisation's admin
+that showed all of it would hand ``ke-kmd.ecmwf-ifs`` to another organisation's
+administrator — which is precisely what M5.6 spent D18 making impossible on the
+public plane. So the gate is ``is_superuser``, checked in the view and not only
+in the menu, and these tests are what stop it from quietly becoming "any admin".
 
-So the gate is ``is_superuser``, checked in the view and not only in the menu,
-and these tests are what stop it from quietly becoming "any admin" later.
+The **publications listing** reads the same document and renders one row of it
+per publication, for the organisation that owns that publication. It can do that
+because an area row narrows and a configuration digest does not, and the tests
+below are where that claim is held to: the narrowing, the single shared read,
+and the distinctions a one-cell rendering could most easily flatten.
+
+They live together because they are one decision seen from both sides. Split
+apart, the listing's tests would read as a listing feature rather than as the
+repair the panel's access rule made necessary.
 """
 
 import time
@@ -23,6 +32,7 @@ from georiva_publisher_forti.models import FortiPublication
 
 from .factories import make_collection, make_org_admin, make_publication, make_user
 from .sink_isolation import TemporarySinkMixin
+from .status_documents import write_forecaster
 
 PUBLISHED = 178835040000
 
@@ -163,27 +173,8 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
     def sign_in(self, user=None):
         self.client.force_login(user or make_org_admin("org-admin"))
 
-    def write_forecaster(self, areas):
-        import json
-
-        from georiva_publisher_forti import verification
-        from georiva_publisher_forti.models import instance_sink
-
-        instance_sink().write(
-            verification.RAWDATAFORECASTER_STATUS_PATH,
-            json.dumps(
-                {
-                    "module": "rawdataforecaster",
-                    "loaded_sha": "f" * 64,
-                    "loaded_at": "2026-09-13T09:00:00Z",
-                    "ok": True,
-                    "state": {"areas": areas},
-                }
-            ).encode("utf-8"),
-        )
-
     def test_the_resident_version_is_shown_beside_the_published_one(self):
-        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
         self.sign_in()
 
         response = self.client.get(self.url)
@@ -195,7 +186,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
     def test_a_resident_version_behind_the_published_one_is_told_apart_from_agreement(self):
         """Published and resident become two facts rather than one assumed to
         imply the other, which is the whole point of the column."""
-        self.write_forecaster([{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
+        write_forecaster(areas=[{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
         self.sign_in()
 
         response = self.client.get(self.url)
@@ -206,7 +197,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
     def test_an_organisation_administrator_sees_it_for_their_own_publications(self):
         """No superuser anywhere in this test. The audience is the operator who
         runs one organisation's models, and the panel above turns them away."""
-        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
         self.sign_in()
 
         response = self.client.get(self.url)
@@ -227,8 +218,8 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
             slug="gfs",
             published_version=BEHIND,
         )
-        self.write_forecaster(
-            [
+        write_forecaster(
+            areas=[
                 {"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED},
                 {"area": theirs.area_key, "available": BEHIND, "loaded": BEHIND},
             ]
@@ -255,11 +246,12 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         self.assertContains(response, "could not read")
         self.assertNotContains(response, "not yet")
+        self.assertNotContains(response, "no reader")
 
     def test_a_publication_that_has_never_published_is_nothing_yet(self):
         self.publication.published_version = None
         self.publication.save(update_fields=["published_version"])
-        self.write_forecaster([])
+        write_forecaster(areas=[])
         self.sign_in()
 
         response = self.client.get(self.url)
@@ -275,7 +267,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         for n in range(4):
             make_publication(make_collection(slug=f"model-{n}"), slug=f"m{n}", published_version=PUBLISHED)
-        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
         self.sign_in()
         sink = instance_sink()
 
@@ -307,6 +299,32 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         self.assertContains(response, "could not read")
         self.assertLess(elapsed, 2.0)
 
+    def test_a_reader_that_has_never_reported_is_not_a_publication_that_has_not(self):
+        """Nothing written under ``status/`` at all. The publication *has*
+        published, so "not yet" would point the operator at their own model for
+        a process that is not running."""
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "no reader")
+        self.assertNotContains(response, "could not read")
+
+    def test_the_results_partial_carries_the_column_too(self):
+        """Wagtail builds ``results/`` from the same ``index_view_class``
+        (`viewsets/model.py:259`), which is what makes search, filtering and
+        paging keep the column and keep it to one read. That is an internal a
+        version bump could move, and every other test here goes through the full
+        page — so the partial is asserted on its own."""
+        write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        self.sign_in()
+
+        response = self.client.get(f"{self.url}results/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "agrees")
+        self.assertContains(response, str(PUBLISHED))
+
     def test_a_listing_with_no_rows_does_not_touch_object_storage(self):
         """The reading is made when the first cell asks and not before, so a
         fresh organisation renders its empty table without a round trip."""
@@ -327,10 +345,10 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         column and the column is built per request — declared in ``list_display``
         it would be built once at import, and every request for the life of the
         process would be answered with the first one's reading."""
-        self.write_forecaster([{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
+        write_forecaster(areas=[{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
         self.sign_in()
 
         self.assertContains(self.client.get(self.url), "differs")
-        self.write_forecaster([{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
 
         self.assertContains(self.client.get(self.url), "agrees")
