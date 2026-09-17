@@ -277,31 +277,83 @@ DERIVATION_INPUTS = {
     "weather_symbol": ("tp", "tcc"),
 }
 
-
-def required_variables(parameters) -> set[str]:
-    """Every GeoRiva variable slug these parameters read, directly or through a
-    derivation."""
-    needed = set()
-    for parameter in parameters:
-        if parameter.source:
-            needed.add(parameter.source)
-        if parameter.derivation:
-            needed.update(DERIVATION_INPUTS[parameter.derivation])
-    return needed
+#: The unit expected of a slot no parameter publishes directly. ``tp`` is read
+#: by four derivations and written by none, so no ``Parameter`` above declares
+#: its unit — and the unit check is a hard refusal, so every slot must have one.
+DERIVED_INPUT_UNITS = {
+    "tp": "mm",
+}
 
 
-def expected_units() -> dict[str, str]:
-    """The GeoRiva unit symbol each source variable must carry.
+@dataclass(frozen=True)
+class Slot:
+    """One GeoRiva variable a publication has to name.
 
-    Forti copies units out of ``meta.json`` without looking at them, so a
-    variable retuned from ``degC`` to ``K`` publishes a number that is wrong by
-    273 and labelled celsius, with nothing in the chain to notice. The planner
-    checks this map before it reads anything.
+    A slot is the *role*, not the variable: "whatever this collection calls
+    2-metre temperature". Eight of the fifteen parameters are derived after the
+    transpose and read no variable of their own, so the mappable set is not the
+    parameter list — it is the variables the parameter map reads, directly or
+    through a derivation.
+
+    The set is fixed and belongs to the format, which is why it is derived from
+    the table above rather than typed out beside it: a parameter added with a
+    new ``source`` becomes a slot in the same commit, instead of a source
+    nothing can be mapped to.
     """
-    units = {}
+
+    key: str
+    """The GeoRiva slug this role is named by — and what auto-match looks for."""
+
+    units: str
+    """The unit symbol a variable must carry to fill it. A hard refusal."""
+
+    feeds: tuple[str, ...]
+    """The Forti parameters that read it, so a surface can say what a wrong
+    mapping would spoil without knowing the parameter map itself."""
+
+
+def _build_slots() -> tuple[Slot, ...]:
+    """The vocabulary, in the order the parameter map first reads each slot.
+
+    Order is part of the vocabulary: it is what a mapping surface renders, and
+    reading order puts the seven directly-published slots first and ``tp``,
+    which only derivations read, last.
+    """
+    feeds: dict[str, list[str]] = {}
+    units: dict[str, str] = {}
+
     for parameter in ALL_PARAMETERS:
+        keys = [parameter.source] if parameter.source else []
+        if parameter.derivation:
+            keys.extend(DERIVATION_INPUTS[parameter.derivation])
+        for key in keys:
+            feeds.setdefault(key, [])
+            if parameter.name not in feeds[key]:
+                feeds[key].append(parameter.name)
         if parameter.source and parameter.expects_unit:
             units[parameter.source] = parameter.expects_unit
-    # The derived series read variables no parameter publishes directly.
-    units.setdefault("tp", "mm")
-    return units
+
+    units.update(DERIVED_INPUT_UNITS)
+
+    undeclared = [key for key in feeds if key not in units]
+    if undeclared:
+        raise RuntimeError(
+            f"Slot(s) {', '.join(sorted(undeclared))} declare no expected unit. Forti copies "
+            f"units out of meta.json without interpreting them, so an unchecked slot is a "
+            f"number published wrong by a constant under a label that looks right. Give the "
+            f"parameter an expects_unit, or add the slot to DERIVED_INPUT_UNITS."
+        )
+
+    return tuple(Slot(key=key, units=units[key], feeds=tuple(names)) for key, names in feeds.items())
+
+
+#: The eight variables a publication maps. Fixed, and defined here only.
+SLOTS = _build_slots()
+
+BY_SLOT = {slot.key: slot for slot in SLOTS}
+
+SLOT_KEYS = tuple(slot.key for slot in SLOTS)
+
+#: For the model field. A literal list rather than the tuple above, because
+#: ``choices`` is frozen into a migration and a tuple would churn it.
+SLOT_CHOICES = [(slot.key, slot.key) for slot in SLOTS]

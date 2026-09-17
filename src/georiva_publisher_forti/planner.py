@@ -39,6 +39,7 @@ from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
 from .models import GENERATIONS_PER_REVISION
+from .units import same_unit
 from .windows import publishable
 
 
@@ -66,7 +67,10 @@ class PublishPlan:
     times: list
     parameters: list
     hrefs: dict = field(default_factory=dict)
-    """``{variable_slug: [href per step, in ``times`` order]}``."""
+    """``{slot key: [href per step, in ``times`` order]}``."""
+
+    mapping: dict = field(default_factory=dict)
+    """``{slot key: variable id}`` — which variable was resolved into each slot."""
 
     time_until_next: timedelta | None = None
 
@@ -96,6 +100,13 @@ class PublishPlan:
         without the generation the skip check returns early on inputs that are
         genuinely unchanged and the bump that was the whole point is never
         written. That is the trap the slug rename hit in the cutover.
+
+        The **mapping** is in here for the same reason from the other side: the
+        same run under a different mapping is different bytes, and the same run
+        under the same mapping is the same bytes. The generation would catch a
+        remap on its own — it is raised by the same edit — but a fingerprint
+        that did not name the inputs it actually read would call two different
+        reads identical, which is precisely what this value is for.
         """
         material = "|".join(
             [
@@ -105,6 +116,7 @@ class PublishPlan:
                 self.times[0].isoformat() if self.times else "",
                 self.times[-1].isoformat() if self.times else "",
                 ",".join(parameter.name for parameter in self.parameters),
+                ",".join(f"{slot}={self.mapping[slot]}" for slot in sorted(self.mapping)),
             ]
         )
         return hashlib.sha256(material.encode()).hexdigest()[:32]
@@ -114,8 +126,8 @@ def plan(publication) -> PublishPlan:
     """What publishing this publication right now would write.
 
     Raises ``NothingToPublish`` when there is no closed run or no step every
-    variable shares, and ``PublicationRefused`` when a variable is missing or
-    carries the wrong unit.
+    variable shares, and ``PublicationRefused`` when the mapping has a blank
+    slot or fills one from a variable in the wrong unit.
     """
     collection = publication.collection
     _refuse_unpublishable_collection(collection)
@@ -128,11 +140,10 @@ def plan(publication) -> PublishPlan:
             f"transpose."
         )
 
-    needed = params.required_variables(params.ALL_PARAMETERS)
-    variables = _resolve_variables(collection, needed)
+    by_slot = _resolve_slots(publication)
 
-    hrefs_by_variable = _cog_hrefs(collection, run.reference_time, variables)
-    times = _shared_times(hrefs_by_variable)
+    hrefs_by_slot = _cog_hrefs(collection, run.reference_time, by_slot)
+    times = _shared_times(hrefs_by_slot)
     if not times:
         raise NothingToPublish(
             f"{collection.slug} @ {run.reference_time:%Y-%m-%dT%H:%MZ}: no timestep has a COG "
@@ -156,7 +167,8 @@ def plan(publication) -> PublishPlan:
         generation=_generation_for(publication, run),
         times=times,
         parameters=chosen,
-        hrefs={slug: [hrefs_by_variable[slug][time] for time in times] for slug in hrefs_by_variable},
+        hrefs={slot: [hrefs_by_slot[slot][time] for time in times] for slot in hrefs_by_slot},
+        mapping={slot: variable.pk for slot, variable in by_slot.items()},
         time_until_next=_time_until_next(publication, collection, run),
     )
 
@@ -210,29 +222,52 @@ def _refuse_unpublishable_collection(collection) -> None:
         )
 
 
-def _resolve_variables(collection, needed: set[str]) -> dict:
-    """The Variable rows behind the slugs, with their units checked.
+def _resolve_slots(publication) -> dict:
+    """``{slot key: Variable}`` — every slot filled, and every unit checked.
 
-    Forti copies units out of ``meta.json`` without interpreting them, so a
-    variable retuned from ``degC`` to ``K`` publishes a number wrong by 273 under
-    a label that says celsius, and every layer downstream agrees.
+    Through the publication's own mapping rather than by slug. The rule the
+    mapping is seeded with *is* the old exact-slug match, so a conventionally
+    named collection resolves to what it always resolved to; what has changed is
+    that a collection naming its variables otherwise can now be published at all,
+    by an operator editing eight rows rather than by renaming variables the rest
+    of the instance already uses.
+
+    Three refusals, in the order an operator can act on them. A **blank slot** is
+    a configuration that is not finished — legal to save, impossible to publish.
+    A variable from **another collection** would have no asset at any timestep,
+    and refusing here says so instead of letting the step intersection come back
+    empty and blame the run. And a **wrong unit** is the one that publishes
+    successfully: Forti copies units out of ``meta.json`` without interpreting
+    them, so a slot filled from a variable in kelvin publishes a number wrong by
+    273 under a label that says celsius, and every layer downstream agrees.
     """
-    found = {variable.slug: variable for variable in collection.variables.filter(slug__in=needed)}
+    collection = publication.collection
+    by_slot = publication.mapped_variables()
 
-    missing = sorted(needed - set(found))
-    if missing:
+    blank = [key for key, variable in by_slot.items() if variable is None]
+    if blank:
         raise PublicationRefused(
-            f"{collection.slug} is missing variable(s) {', '.join(missing)}. The parameter "
-            f"map needs all of {', '.join(sorted(needed))}."
+            f"{publication.slug} has nothing mapped to {', '.join(blank)}. Every slot in the "
+            f"parameter map has to name a variable of {collection.slug} before this can "
+            f"publish — fill the blank ones in on the publication."
         )
 
-    expected = params.expected_units()
+    foreign = [
+        f"{key} ← {variable.slug}" for key, variable in by_slot.items() if variable.collection_id != collection.pk
+    ]
+    if foreign:
+        raise PublicationRefused(
+            f"{publication.slug} maps {', '.join(foreign)} from outside {collection.slug}. A "
+            f"publication reads its own collection's COGs, so those slots have no asset at "
+            f"any timestep. Remap them, or publish the collection they belong to."
+        )
+
     wrong = []
-    for slug, variable in found.items():
-        want = expected.get(slug)
+    for key, variable in by_slot.items():
+        want = params.BY_SLOT[key].units
         have = variable.unit.symbol if variable.unit else None
-        if want and not _same_unit(have, want):
-            wrong.append(f"{slug} is {have!r}, expected {want!r}")
+        if not same_unit(have, want):
+            wrong.append(f"{key} ← {variable.slug} is {have!r}, expected {want!r}")
     if wrong:
         raise PublicationRefused(
             "Units do not match what the parameter map publishes: "
@@ -241,58 +276,40 @@ def _resolve_variables(collection, needed: set[str]) -> dict:
             "publish a wrong number under a right-looking label."
         )
 
-    return found
+    return by_slot
 
 
-def _same_unit(symbol: str | None, expected: str) -> bool:
-    """Whether two unit symbols name the same unit, not merely a compatible one.
+def _cog_hrefs(collection, reference_time, by_slot) -> dict:
+    """``{slot key: {time: href}}`` for one run's COG assets.
 
-    Compared through pint rather than as strings: an instance may spell degrees
-    Celsius ``°C`` or ``degC`` depending on which seed wrote the row, and both are
-    the same unit. Kelvin is *compatible* with Celsius and is not the same unit —
-    which is the whole point of checking, since Forti converts nothing.
-
-    A symbol pint cannot parse falls back to an exact string match. That is
-    stricter than necessary and refuses rather than guesses, which is the right
-    way round when the alternative is publishing a wrong number.
+    Keyed by slot and gathered by variable **id**, not by slug: the slug is no
+    longer the slot's name, and one variable may legitimately fill two slots —
+    an instance that derives dew point and temperature from one field, say — in
+    which case its hrefs belong to both.
     """
-    if symbol is None:
-        return False
-    if symbol == expected:
-        return True
+    assets = Asset.objects.filter(
+        item__collection=collection,
+        item__reference_time=reference_time,
+        variable__in=set(by_slot.values()),
+        format=Asset.Format.COG,
+    ).values_list("variable_id", "item__time", "href")
 
-    from georiva.core.models.units import ureg
+    slots_by_variable = {}
+    for slot, variable in by_slot.items():
+        slots_by_variable.setdefault(variable.pk, []).append(slot)
 
-    try:
-        return str(ureg(symbol).u) == str(ureg(expected).u)
-    except Exception:
-        return False
-
-
-def _cog_hrefs(collection, reference_time, variables) -> dict:
-    """``{variable_slug: {time: href}}`` for one run's COG assets."""
-    assets = (
-        Asset.objects.filter(
-            item__collection=collection,
-            item__reference_time=reference_time,
-            variable__in=variables.values(),
-            format=Asset.Format.COG,
-        )
-        .select_related("variable")
-        .values_list("variable__slug", "item__time", "href")
-    )
-
-    by_variable = {slug: {} for slug in variables}
-    for slug, time, href in assets:
-        by_variable[slug][time] = href
-    return by_variable
+    hrefs = {slot: {} for slot in by_slot}
+    for variable_id, time, href in assets:
+        for slot in slots_by_variable[variable_id]:
+            hrefs[slot][time] = href
+    return hrefs
 
 
-def _shared_times(hrefs_by_variable) -> list:
-    """The timesteps every variable has, in order."""
-    if not hrefs_by_variable:
+def _shared_times(hrefs_by_slot) -> list:
+    """The timesteps every slot has, in order."""
+    if not hrefs_by_slot:
         return []
-    shared = set.intersection(*(set(times) for times in hrefs_by_variable.values()))
+    shared = set.intersection(*(set(times) for times in hrefs_by_slot.values()))
     return sorted(shared)
 
 
