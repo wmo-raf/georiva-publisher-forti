@@ -29,9 +29,10 @@ obvious default (render what you read, inside one organisation's admin) would
 hand ``ke-kmd.ecmwf-ifs`` to another organisation's administrator. The deciding
 argument is not the leak but the audience: every action this page prompts —
 restart the pair, fix the endpoint, re-fetch the compose file — belongs to the
-person who deployed it. What that gives up is that an organisation administrator
-cannot see whether their own model is resident; that question is about one
-publication and belongs beside it, not here.
+person who deployed it. What that gave up is that an organisation administrator
+could not see whether their own model is resident; that question is about one
+publication and is answered beside it, by :func:`resident_areas` on the
+publications listing, over the same read and under the same deadline.
 
 **When the reads happen: on request, under one deadline, never cached.** An
 operator loads this to answer "is it working *now*", and a cache would answer a
@@ -40,7 +41,8 @@ risk a cache would have bought down — an admin worker held open while MinIO do
 not answer — is bought down instead by the thing that actually causes it: the
 whole set of reads runs in one worker thread with one deadline, so the page
 renders either the readings or "the bucket did not answer", and never blocks
-past it. See :func:`_readings`.
+past it. See :func:`_guarded`, which is also the rule the publications listing
+reads under — one discipline rather than a second, weaker one per surface.
 
 **What a failed read renders as: not the same thing as no file yet.** Both are
 true of every hop on this instance today — nothing is published under ``_forti/``
@@ -98,6 +100,47 @@ FOREIGN = "foreign"
 #: Hop 4 only. The process read this document and rejected it; the configuration
 #: it is serving is the previous one. See the module docstring.
 REFUSED = "refused"
+
+#: Areas only. The process wrote a status file, it parsed, and it names no area
+#: state at all — an image older than M5.1's second fix. Distinct from both
+#: neighbours it would otherwise be filed under: the document *was* read, so this
+#: is not :data:`~.config.UNREACHABLE`, and the reader has said nothing about the
+#: area rather than said it is absent, so it is not :data:`~.config.ABSENT`
+#: either. A column that collapsed it into one of those would report "nothing
+#: resident" about a process that was never asked.
+UNREPORTED = "unreported"
+
+#: Areas only, and a badge rather than a presence: **nothing has written a
+#: status file at all**. The document's absence and the publication's are both
+#: :data:`~.config.ABSENT` from Django's side and are not the same afternoon —
+#: one is a process that is not reporting, the other a model that has not
+#: published yet — so a listing that gave them one word would send an operator
+#: to look at their own publication for a reader that is not running.
+NO_READER = "no reader"
+
+#: Why an area GeoRiva publishes is missing from the reader's list, said once for
+#: both surfaces that say it. The panel reaches it by set difference over every
+#: configured area; :meth:`ResidentAreas.of` reaches it one publication at a
+#: time — and an operator who read two different sentences for one state would
+#: reasonably conclude they were two states.
+NOT_IN_THE_AREA_LIST = (
+    "Not in the configuration this reader is running — it is behind the area list GeoRiva intends, "
+    "so nothing would load this area."
+)
+
+#: What a reader that reports no area state proves, and what it does not. Said
+#: once for the same reason :data:`NOT_IN_THE_AREA_LIST` is.
+NO_AREA_STATE = (
+    "This rawdataforecaster reports no state. M5.1's second fix — the status file listing resident "
+    "areas — is not in the image that is running, so a config that parsed is all this instance can prove."
+)
+
+#: What a *publication's* row says when the reader cannot list the store. The
+#: error itself is the reader's own and instance-wide, and it quotes the key it
+#: choked on — which can belong to another organisation. So the row an
+#: organisation administrator reads says *that* the listing is failing and the
+#: panel, which is the instance admin's, says what it said.
+LISTING_IS_FAILING = "its listing of _forti/latest/ is failing, which the instance admin's Forti serving panel reports"
 
 #: Where each process leaves its status. ``configwatch`` writes
 #: ``<status-dir>/<module>.json`` (`configwatch.go:217`) and the sidecar copies
@@ -173,6 +216,8 @@ _BADGE_LABELS = {
     WITHHELD: "nothing to write",
     FOREIGN: "not this document",
     REFUSED: "refused",
+    UNREPORTED: "cannot say",
+    NO_READER: "no reader",
 }
 
 
@@ -252,6 +297,159 @@ class AreaRow:
     loaded: int | None
     verdict: str
     ok: bool
+
+
+#: The colour each residency state is emphasised in, in Wagtail's own utility
+#: classes. Keyed by :attr:`Residency.badge`, so a state added without a rule
+#: here renders in the table's ordinary text rather than in the wrong colour.
+_RESIDENCY_CLASSES = {
+    "agrees": "w-text-positive-100",
+    "differs": "w-text-critical-200",
+    ABSENT: "w-text-grey-400",
+    NO_READER: "w-text-warning-100",
+    UNREACHABLE: "w-text-warning-100",
+    FOREIGN: "w-text-critical-200",
+    UNREPORTED: "w-text-grey-400",
+}
+
+
+@dataclass(frozen=True)
+class Residency:
+    """What ``rawdataforecaster`` holds for **one** area, and nothing else.
+
+    :class:`AreaRow` narrowed to a single publication, for the listing an
+    organisation administrator already has. The panel answers "what is this
+    instance serving"; this answers "is *my* model resident" — and the second
+    question is answerable without the first, which is what lets one be an
+    organisation's and the other the instance admin's.
+
+    Every distinction the panel draws has to survive the narrowing, because this
+    renders as one cell rather than as five columns. A document that could not
+    be read is not a document that is not there; a reader that has said nothing
+    about an area has not said the area is absent. Collapsing either reports an
+    outage as an instance that has simply not cut over yet.
+    """
+
+    area: str
+    published: int | None = None
+    available: int | None = None
+    loaded: int | None = None
+    #: Of the **status document**, not of the area: :data:`~.config.PRESENT`
+    #: means the reader answered, whatever it answered about this area.
+    presence: str = ABSENT
+    #: Whether the reader is serving what the database says was published.
+    #: ``None`` where there is nothing to compare — which is not ``False``, and
+    #: is the ordinary state of a publication that has never run.
+    ok: bool | None = None
+    detail: str = ""
+
+    @property
+    def figure(self) -> str:
+        """The resident version, as a string and never localised.
+
+        A version is an identifier that happens to be spelled in digits: it is
+        compared against what a template prints elsewhere and pasted into a
+        bucket path, so ``USE_THOUSAND_SEPARATOR`` turning it into
+        ``17,892,576,000,000`` would make the page disagree with the bucket.
+        """
+        return "" if self.loaded is None else str(self.loaded)
+
+    @property
+    def badge(self) -> str:
+        """The one word this row gets, decided here rather than in the template.
+
+        The same vocabulary the hops use, for the same reason: a template
+        working it out with ``{% if %}`` would be a second place the states are
+        written down, and the place nobody tests.
+        """
+        if self.presence == ABSENT:
+            # The *document's* absence, which is the reader's silence and not
+            # this publication's. See :data:`NO_READER`.
+            return NO_READER
+        if self.presence != PRESENT:
+            return self.presence
+        if self.ok is None:
+            return ABSENT
+        return "agrees" if self.ok else "differs"
+
+    @property
+    def badge_label(self) -> str:
+        return _BADGE_LABELS.get(self.badge, self.badge)
+
+    @property
+    def badge_class(self) -> str:
+        """Wagtail's own utility class for this state, and no stylesheet of our own.
+
+        The panel carries its palette in a ``{% block extra_css %}`` because it
+        is a page; a table cell has no such block, and a plugin that injected
+        global admin CSS for one column would be styling every page in the admin
+        to colour six words. The word is the distinction and the colour is the
+        emphasis — so an unstyled state degrades to legible rather than to
+        somebody else's meaning.
+        """
+        return _RESIDENCY_CLASSES.get(self.badge, "")
+
+
+@dataclass(frozen=True)
+class ResidentAreas:
+    """One read of the reader's status document, answerable one area at a time.
+
+    The read is shared and the *answer* is narrow, which is the whole shape of
+    this: the document lists every area on the instance at once, so a listing of
+    twenty publications is one read and not twenty — and each row can only ever
+    ask :meth:`of` about the publication it already holds. The narrowing is
+    therefore structural rather than a filter somebody has to remember to apply,
+    which is what makes it safe on a page the instance-wide panel is not.
+    """
+
+    #: Of the document as a whole. Every row inherits it when it is not
+    #: :data:`~.config.PRESENT`, because a row cannot know more than the read
+    #: that would have told it.
+    presence: str
+    #: ``area key → (available, loaded)``, in the order the reader lists them.
+    #: Not ``reported``: :attr:`Module.reported` and :attr:`Chain.reported` in
+    #: this same module are booleans meaning "the reader said anything at all",
+    #: and one word for both a yes/no and a mapping is a word that reads wrong
+    #: at whichever of the three sites you meet second.
+    by_area: dict = field(default_factory=dict)
+    store_error: str = ""
+    detail: str = ""
+
+    def of(self, publication) -> Residency:
+        """This publication's row, built from the one read.
+
+        Takes the publication rather than an area key so the two halves of the
+        comparison arrive together: the resident version comes from the
+        document, the published one from the row the caller is already
+        rendering, and there is no call shape that fetches somebody else's.
+        """
+        area = publication.area_key
+        published = publication.published_version
+
+        if self.presence != PRESENT:
+            return Residency(area, published, presence=self.presence, detail=self.detail)
+
+        entry = self.by_area.get(area)
+        if entry is None:
+            if published is None:
+                return Residency(
+                    area,
+                    presence=PRESENT,
+                    detail="Nothing has been published under this key and nothing is resident.",
+                )
+            return Residency(area, published, presence=PRESENT, ok=False, detail=NOT_IN_THE_AREA_LIST)
+
+        available, loaded = entry
+        # The phrase, never the error. See :data:`LISTING_IS_FAILING`.
+        detail, ok = _area_verdict(published, available, loaded, LISTING_IS_FAILING if self.store_error else "")
+        if published is None and available is None and loaded is None:
+            # The panel calls this row a fault, and is right to: an area the
+            # reader is *configured* with and holding nothing is one it was told
+            # to serve and cannot. Here the row is a publication, and a
+            # publication that has never published is a state rather than a
+            # fault — the state every one of them starts in.
+            ok = None
+        return Residency(area, published, available, loaded, PRESENT, ok, detail)
 
 
 @dataclass(frozen=True)
@@ -410,19 +608,25 @@ def _read_all(sink) -> dict:
     }
 
 
-def _readings(sink, deadline: float):
-    """The readings, or ``None`` if the bucket did not answer in time.
+def _guarded(read, deadline: float):
+    """``read()``'s answer, or ``None`` if it did not arrive in time.
 
     The thread is not cancellable — a socket blocked in ``recv`` does not care
     that nobody is waiting — so ``shutdown(wait=False)`` is the point of this
     function rather than an oversight: the orphan finishes or times out on
     botocore's own schedule, in the background, while the request returns. The
-    alternative is the admin page holding a worker through the full retry
+    alternative is an admin page holding a worker through the full retry
     ladder, which is the failure this deadline exists for.
+
+    A function over a callable rather than over ``_read_all``, because the panel
+    and the publication listing read different sets of documents and must not
+    read them under different rules. One deadline, one abandoned thread, no
+    cache — written once so a second surface cannot quietly get a weaker version
+    of it.
     """
     pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="forti-verification")
     try:
-        return pool.submit(_read_all, sink).result(timeout=deadline)
+        return pool.submit(read).result(timeout=deadline)
     except FutureTimeout:
         logger.warning("the publications bucket did not answer within %ss", deadline)
         return None
@@ -754,8 +958,13 @@ def _area_verdict(
 
     ``store_error`` is a parameter rather than read from module state for exactly
     that: "no marker" means two different things depending on whether the listing
-    that failed to find one had itself failed, and only one of the two is a
-    pointer at the banner above.
+    that failed to find one had itself failed, and only one of the two is about
+    the store rather than about the area.
+
+    It is quoted into the sentence rather than pointed at, because these rows are
+    rendered on two surfaces now and only one of them has a banner to point at.
+    The panel prints the error above as well — redundancy on the page that
+    explains it, rather than a dangling "see above" on the listing that does not.
     """
     if loaded is None and available is None:
         if published is None:
@@ -763,7 +972,7 @@ def _area_verdict(
         if store_error:
             return (
                 f"GeoRiva has published version {published} and the reader found no marker for "
-                f"it — but its listing is failing, so this figure proves nothing. See above.",
+                f"it — but its listing is failing, so this figure proves nothing: {store_error}",
                 False,
             )
         return (
@@ -782,7 +991,7 @@ def _area_verdict(
         if store_error:
             return (
                 f"Serving {loaded}, but the reader cannot list the store, so whether a marker "
-                f"still names that version is unknown. See above.",
+                f"still names that version is unknown: {store_error}",
                 False,
             )
         return (
@@ -799,14 +1008,58 @@ def _area_verdict(
         )
     if published is None:
         return (f"Serving {loaded}, for an area no publication on this instance names.", False)
+    if loaded > published:
+        # Resident *ahead* of the database. Everything above this line is the
+        # reader lagging, which is the ordinary direction; this is the other
+        # one, and it used to fall through to the agreement branch below and
+        # render "agrees" in green over two visibly different numbers, under a
+        # sentence calling `loaded` "the version GeoRiva published" when it is
+        # precisely not. Whatever produced it — a database restored past a
+        # publish, a second instance writing this area — the two facts disagree
+        # and the column exists to say when they do.
+        return (
+            f"Serving {loaded}, which is ahead of the {published} GeoRiva has published — "
+            f"the database has been rolled back, or something else is publishing this area.",
+            False,
+        )
     return (f"Serving {loaded}, the version GeoRiva published.", True)
+
+
+def _reported_areas(state):
+    """``area key → (available, loaded)``, or ``None`` if there is no state.
+
+    The **one** place the reader's area list is taken apart, because the panel
+    and the publication listing both need it and a second parser of one document
+    is the arrangement in which one of them later drifts. In the order the
+    reader lists them, which is the configuration's order (`forecast.go:414`)
+    and not this reader's to change.
+
+    ``None`` is a third answer and not an empty list: a process that reports no
+    state has said nothing about any area, while one reporting an empty list has
+    said it holds none. See :data:`UNREPORTED`.
+
+    Keyed by area, so a document listing one area twice yields the **last**
+    entry rather than two rows. An area is the unit this whole plugin publishes
+    and the reader selects by, so two rows under one key is a malformed document
+    either way — and one row that might be stale beats two that disagree with
+    each other beside a verdict that can only be about one of them.
+    """
+    if not isinstance(state, dict):
+        return None
+
+    reported = state.get("areas")
+    rows = {}
+    for entry in reported if isinstance(reported, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        rows[str(entry.get("area") or "")] = (entry.get("available"), entry.get("loaded"))
+    return rows
 
 
 def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
     """The rows, why there are none, and the store error.
 
-    Configured areas only and in the order the configuration lists them, which
-    is the fork's rule (`forecast.go:414`) and not this reader's to change: an
+    Configured areas only and in the order the configuration lists them: an
     area on the bucket that nobody asked for is not that process's business.
     Areas GeoRiva intends that the reader does not list are appended after,
     because their absence is a fact about the configuration hop and would
@@ -816,26 +1069,14 @@ def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
         publication.area_key: publication.published_version for publication in rdfconfig.servable(publications)
     }
 
-    if not isinstance(state, dict):
-        detail = (
-            "This rawdataforecaster reports no state. M5.1's second fix — the status file "
-            "listing resident areas — is not in the image that is running, so a config that "
-            "parsed is all this instance can prove."
-        )
-        return ((), detail, "")
+    reported = _reported_areas(state)
+    if reported is None:
+        return ((), NO_AREA_STATE, "")
 
     store_error = str(state.get("store_error") or "")
-    reported = state.get("areas")
     rows = []
-    seen = set()
 
-    for entry in reported if isinstance(reported, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        area = str(entry.get("area") or "")
-        seen.add(area)
-        loaded = entry.get("loaded")
-        available = entry.get("available")
+    for area, (available, loaded) in reported.items():
         verdict, ok = _area_verdict(published.get(area), available, loaded, store_error)
         rows.append(
             AreaRow(
@@ -848,14 +1089,14 @@ def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
             )
         )
 
-    for area in sorted(set(published) - seen):
+    for area in sorted(set(published) - set(reported)):
         rows.append(
             AreaRow(
                 area=area,
                 published=published[area],
                 available=None,
                 loaded=None,
-                verdict="Not in the configuration this reader is running — it is behind the area list above.",
+                verdict=NOT_IN_THE_AREA_LIST,
                 ok=False,
             )
         )
@@ -871,6 +1112,55 @@ def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
 
 def deadline_seconds() -> float:
     return float(getattr(settings, "GEORIVA_FORTI_VERIFICATION_DEADLINE", DEFAULT_DEADLINE))
+
+
+def resident_areas(*, sink=None, deadline: float | None = None) -> ResidentAreas:
+    """One read of ``rawdataforecaster``'s status file, narrowable to one area.
+
+    The repair the panel's own docstring names. Every figure on that page is
+    instance-wide and none of it narrows, so it is the instance admin's — which
+    leaves an organisation administrator unable to see whether their own model
+    is resident. **An area row narrows safely and a configuration digest does
+    not**: the row is one key, one version and one organisation, while a sha
+    describes one document governing every tenant. That difference is the reason
+    this function can exist and the reason it is a function here rather than a
+    widening of who may open the panel.
+
+    Reads the same document :func:`report` reads, through the same
+    :func:`read_status` guard and under the same :func:`_guarded` deadline — one
+    worker thread, nothing cached, an honest answer rather than a held worker.
+    Only the narrowing is new.
+    """
+    from .models import instance_sink
+
+    if sink is None:
+        sink = instance_sink()
+    if deadline is None:
+        deadline = deadline_seconds()
+
+    reading = _guarded(
+        lambda: read_status(sink, RAWDATAFORECASTER_STATUS_PATH, RAWDATAFORECASTER_MODULE),
+        deadline,
+    )
+    if reading is None:
+        return ResidentAreas(UNREACHABLE, detail=f"The bucket did not answer within {deadline:g} s.")
+    if reading.presence == ABSENT:
+        # ``_module`` is what turns "no document" into the sentence an operator
+        # reads on the panel, and this must not be a second wording of it. Only
+        # this branch may reach it: that sentence asserts nothing was ever
+        # written, which is a claim a read that *failed* has not earned — and
+        # "could not read" over a tooltip saying "never written" is the exact
+        # conflation the presences exist to prevent.
+        return ResidentAreas(ABSENT, detail=_module(RAWDATAFORECASTER_MODULE, reading).detail)
+    if reading.presence != PRESENT:
+        return ResidentAreas(reading.presence, detail=reading.detail)
+
+    state = reading.payload.get("state")
+    by_area = _reported_areas(state)
+    if by_area is None:
+        return ResidentAreas(UNREPORTED, detail=NO_AREA_STATE)
+
+    return ResidentAreas(PRESENT, by_area=by_area, store_error=str(state.get("store_error") or ""))
 
 
 def report(*, sink=None, deadline: float | None = None) -> Report:
@@ -892,7 +1182,7 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
     publications = config.publications_to_serve()
     intended = config.intended(publications)
 
-    readings = _readings(sink, deadline)
+    readings = _guarded(lambda: _read_all(sink), deadline)
     answered = readings is not None
     if readings is None:
         timed_out = f"The bucket did not answer within {deadline:g} s."

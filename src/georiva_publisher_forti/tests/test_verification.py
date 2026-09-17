@@ -14,7 +14,6 @@ of the ones that matter are true of this instance today:
   apart, which is the whole of M5.1's first fix.
 """
 
-import json
 import threading
 import time
 from unittest.mock import patch
@@ -27,9 +26,14 @@ from georiva_publisher_forti.verification import FOREIGN, REFUSED, WITHHELD
 
 from .factories import make_collection, make_publication
 from .sink_isolation import TemporarySinkMixin
+from .status_documents import write_forecaster, write_status
 
 PUBLISHED = 178835040000
 LATER = 178856640000
+
+#: A store listing error that names another organisation's key, because that is
+#: what the Go side puts in one: the message quotes the object it choked on.
+FOREIGN_KEY_IN_STORE_ERROR = "listing _forti/latest/: unparseable key other-org.gfs/1/x"
 
 RAWDATAFORECASTER = "rawdataforecaster.json"
 JSONFORMAT = "jsonformat.json"
@@ -61,7 +65,7 @@ class PanelTestCase(TemporarySinkMixin, TestCase):
         return config.intended()[path]
 
     def write_status(self, path, payload):
-        self.sink().write(path, json.dumps(payload).encode("utf-8"))
+        write_status(path, payload)
 
     def write_sidecar(self, volume, **overrides):
         payload = {
@@ -76,20 +80,8 @@ class PanelTestCase(TemporarySinkMixin, TestCase):
         payload.update(overrides)
         self.write_status(verification.SIDECAR_PATH, payload)
 
-    def write_forecaster(self, loaded_sha, *, areas=None, store_error=None, ok=True, errors=None):
-        state = {"areas": areas if areas is not None else []}
-        if store_error:
-            state["store_error"] = store_error
-        payload = {
-            "module": "rawdataforecaster",
-            "loaded_sha": loaded_sha,
-            "loaded_at": "2026-09-13T09:00:10Z",
-            "ok": ok,
-            "state": state,
-        }
-        if errors:
-            payload["errors"] = errors
-        self.write_status(verification.RAWDATAFORECASTER_STATUS_PATH, payload)
+    def write_forecaster(self, loaded_sha, **kwargs):
+        write_forecaster(loaded_sha, **kwargs)
 
     def chain(self, report, document=RAWDATAFORECASTER):
         return next(chain for chain in report.chains if chain.document == document)
@@ -474,3 +466,210 @@ class FreshnessTests(PanelTestCase):
 
         self.assertEqual(report.sidecar.checked_at, "not a time")
         self.assertEqual(report.sidecar.age, "")
+
+
+class ResidencyTests(PanelTestCase):
+    """The same document, narrowed to one publication.
+
+    The panel answers "what is this instance serving"; this answers "is *my*
+    model resident", for an operator who may not be shown the first question.
+    The distinctions are the panel's own — a document that could not be read is
+    not a document that is not there — and they have to survive the narrowing,
+    because the surface that renders them has one cell per row rather than a
+    table with five columns.
+    """
+
+    def setUp(self):
+        super().setUp()
+        config.refresh()
+        self.sha = self.intended_sha(config.RAWDATAFORECASTER_PATH)
+
+    def residency(self, publication=None, **kwargs):
+        return verification.resident_areas(sink=self.sink(), **kwargs).of(publication or self.publication)
+
+    def test_a_resident_area_at_the_published_version_agrees(self):
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.loaded, PUBLISHED)
+        self.assertEqual(residency.published, PUBLISHED)
+        self.assertEqual(residency.badge, "agrees")
+
+    def test_a_resident_area_behind_the_published_version_differs(self):
+        """The whole reason this column exists: published and resident are two
+        facts, and the index showed only the first."""
+        self.publication.published_version = LATER
+        self.publication.save(update_fields=["published_version"])
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.badge, "differs")
+        self.assertEqual(residency.loaded, PUBLISHED)
+
+    def test_a_resident_area_ahead_of_the_published_version_also_differs(self):
+        """The other direction, which used to render "agrees" in green.
+
+        Every other disagreement here is the reader lagging. This is the reader
+        *ahead* — a database restored past a publish, or a second instance
+        writing the same area — and it fell through to the agreement branch,
+        which called the resident figure "the version GeoRiva published" beside
+        a published column showing a different number.
+        """
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": LATER, "loaded": LATER}])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.badge, "differs")
+        self.assertEqual(residency.loaded, LATER)
+        self.assertEqual(residency.published, PUBLISHED)
+        self.assertIn("ahead of", residency.detail)
+
+    def test_a_published_area_the_reader_does_not_list_is_a_disagreement(self):
+        """Not an absence. GeoRiva says it published; the process serving it has
+        never been told the area exists."""
+        self.write_forecaster(self.sha, areas=[])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.badge, "differs")
+        self.assertIsNone(residency.loaded)
+        self.assertIn("behind the area list", residency.detail)
+
+    def test_a_publication_that_has_never_published_is_nothing_yet(self):
+        """Not a disagreement — there is nothing to disagree with. This is the
+        state every new publication is in, so it must not render as a fault."""
+        self.publication.published_version = None
+        self.publication.save(update_fields=["published_version"])
+        self.write_forecaster(self.sha, areas=[])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.badge, ABSENT)
+        self.assertEqual(residency.badge_label, "not yet")
+
+    def test_no_status_document_is_the_readers_silence_not_the_publications(self):
+        """Three states are ``ABSENT`` from Django's side and they are three
+        different afternoons: nothing was ever written (the pair has never been
+        started here), the read failed, and this model has simply never
+        published. The first is the reader's silence and gets its own word —
+        otherwise an operator goes looking at their own publication for a
+        process that is not running."""
+        residency = self.residency()
+
+        self.assertEqual(residency.presence, ABSENT)
+        self.assertEqual(residency.badge_label, "no reader")
+        self.assertIn("never written a status file", residency.detail)
+
+    def test_a_failing_read_is_could_not_read_rather_than_nothing_yet(self):
+        """Collapsing these two reports an outage as an instance that has not
+        cut over — the one mistake the six presences exist to prevent."""
+        sink = self.sink()
+
+        with patch.object(type(sink), "exists", side_effect=OSError("connection refused")):
+            residency = verification.resident_areas(sink=sink).of(self.publication)
+
+        self.assertEqual(residency.presence, UNREACHABLE)
+        self.assertEqual(residency.badge_label, "could not read")
+        self.assertIn("connection refused", residency.detail)
+
+    def test_a_bucket_that_does_not_answer_in_time_is_could_not_read(self):
+        """One worker thread and one deadline, the discipline the panel already
+        established: a listing renders either the readings or an honest sentence,
+        and never holds an admin worker through botocore's retry ladder."""
+
+        def slow(sink, path, module):
+            time.sleep(3.0)
+
+        with patch.object(verification, "read_status", slow):
+            residency = verification.resident_areas(sink=self.sink(), deadline=0.05).of(self.publication)
+
+        self.assertEqual(residency.presence, UNREACHABLE)
+        self.assertIn("did not answer", residency.detail)
+
+    def test_an_image_without_the_status_fix_cannot_say(self):
+        """A reader that reports no state proves only that a *config* parsed. It
+        has not said the area is absent, and must not be read as having done."""
+        self.write_status(
+            verification.RAWDATAFORECASTER_STATUS_PATH,
+            {"module": "rawdataforecaster", "loaded_sha": self.sha, "ok": True},
+        )
+
+        residency = self.residency()
+
+        self.assertEqual(residency.presence, verification.UNREPORTED)
+        self.assertNotEqual(residency.badge_label, "not yet")
+
+    def test_a_failing_listing_makes_a_missing_marker_unknowable(self):
+        """``available`` does not decay, so the absence of a marker is unknown
+        rather than known — and the row says so where it is read, because the
+        listing this row is on has no banner above it."""
+        self.write_forecaster(
+            self.sha,
+            areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}],
+            store_error=FOREIGN_KEY_IN_STORE_ERROR,
+        )
+
+        residency = self.residency()
+
+        self.assertIn("unknown", residency.detail)
+        self.assertIn("listing", residency.detail)
+
+    def test_the_readers_store_error_is_not_quoted_to_an_organisation(self):
+        """The error is the reader's own and instance-wide, and it quotes the
+        key it choked on — which can belong to somebody else. An area row
+        narrows; the sentence beside it has to narrow with it, or the narrowing
+        is only as good as whatever the Go side happened to put in a string."""
+        self.write_forecaster(
+            self.sha,
+            areas=[{"area": self.area, "available": None, "loaded": PUBLISHED}],
+            store_error=FOREIGN_KEY_IN_STORE_ERROR,
+        )
+
+        residency = self.residency()
+
+        self.assertNotIn("other-org", residency.detail)
+        self.assertNotIn("unparseable", residency.detail)
+
+    def test_a_row_only_ever_answers_about_its_own_area(self):
+        """The narrowing, structurally rather than by filtering: the caller hands
+        over a publication and gets that publication's area back. There is no
+        call that returns another organisation's row, which is what lets this be
+        an organisation administrator's column while the panel stays the instance
+        admin's page."""
+        theirs = make_publication(
+            make_collection(slug="gfs-surface", org_slug="other-org"),
+            slug="gfs",
+            published_version=PUBLISHED,
+        )
+        self.write_forecaster(
+            self.sha,
+            areas=[
+                {"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED},
+                {"area": theirs.area_key, "available": LATER, "loaded": LATER},
+            ],
+        )
+
+        mine = self.residency()
+
+        self.assertEqual(mine.area, self.area)
+        self.assertEqual(mine.loaded, PUBLISHED)
+
+    def test_the_document_is_read_once_however_many_rows_ask(self):
+        """The status document lists every area at once, so a listing of twenty
+        publications is one read and not twenty. A reader per row would put the
+        deadline on the page rather than on the read."""
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        others = [
+            make_publication(make_collection(slug=f"model-{n}"), slug=f"m{n}", published_version=PUBLISHED)
+            for n in range(4)
+        ]
+        sink = self.sink()
+
+        with patch.object(type(sink), "read_json", wraps=sink.read_json) as read_json:
+            resident = verification.resident_areas(sink=sink)
+            rows = [resident.of(publication) for publication in [self.publication, *others]]
+
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(read_json.call_count, 1)

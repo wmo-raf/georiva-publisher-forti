@@ -1,4 +1,4 @@
-"""The operator's two surfaces: one publication, and the whole serving plane.
+"""The operator's surfaces: one publication, a list of them, and the serving plane.
 
 Almost everything on the model is *output* — the pinned grid, what was last
 published, the lock bookkeeping — so the form offers only the handful of fields
@@ -38,10 +38,14 @@ compose file, which is the instance admin. There is consequently nothing here to
 narrow, and no ``scoped_queryset``: narrowing a sha is not a thing that can be
 done, and a page showing half a chain would answer a question nobody asked.
 
-What that gives up, explicitly: an organisation administrator cannot see whether
-their own model is resident and at which version. That is a real loss and the
-right place to repair it is beside the publication, whose organisation *is*
-known — not by widening this page's audience to the documents it cannot narrow.
+What that gave up, explicitly, was that an organisation administrator could not
+see whether their own model is resident and at which version. That is repaired
+where it was always going to be — beside the publication, whose organisation
+*is* known — by :class:`ResidencyColumn` on the listing, and **not** by widening
+this page's audience to the documents it cannot narrow. An area row is one key,
+one version and one organisation; a configuration sha describes one document
+governing every tenant and narrows to nobody. That difference is the whole of
+why one of these is an organisation's and the other is not.
 """
 
 import logging
@@ -50,13 +54,15 @@ from django.contrib import messages
 from django.forms.models import ModelChoiceIterator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import path, reverse, reverse_lazy
+from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
 from wagtail import hooks
 from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
 from wagtail.admin.panels import FieldPanel, MultiFieldPanel
+from wagtail.admin.ui.tables import Column
 from wagtail.snippets.models import register_snippet
-from wagtail.snippets.views.snippets import CreateView, EditView, SnippetViewSet
+from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, SnippetViewSet
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
@@ -114,6 +120,77 @@ class ForecastCollectionsOnlyMixin:
         return form
 
 
+class ResidencyColumn(Column):
+    """What is actually resident, beside what the database says was published.
+
+    The two are different facts, and the listing showed only the second — so an
+    operator read "published, version N" and had nothing to tell them whether
+    any process was serving it. The one surface that knew was the instance-wide
+    panel, which an organisation administrator may not open.
+
+    **One read for the whole page.** ``rawdataforecaster``'s status document
+    lists every area at once, so the reading is a ``cached_property`` on the
+    column and the column is built per request: the first cell pays for the
+    read and every other cell is a dictionary lookup. A column that read per row
+    would put object storage's deadline on the *page* rather than on the read,
+    and a listing of twenty models would be twenty round trips.
+
+    **Narrowed by construction.** :meth:`~.verification.ResidentAreas.of` takes
+    the publication whose row is being rendered, so a cell can only ever ask
+    about the area it already holds — there is no call shape here that returns
+    somebody else's row. Why that is safe on a page the panel is not is argued
+    once, in this module's docstring.
+    """
+
+    cell_template_name = "georiva_publisher_forti/tables/residency_cell.html"
+
+    @cached_property
+    def resident(self):
+        """The one read, made when the first cell asks and not before.
+
+        Lazy rather than eager in ``__init__`` so a listing with no rows — a
+        fresh organisation, or a search that matched nothing — does not touch
+        object storage to render an empty table.
+        """
+        return verification.resident_areas()
+
+    def get_value(self, instance):
+        return self.resident.of(instance)
+
+
+class FortiPublicationIndexView(IndexView):
+    """The listing, with residency spliced in beside the published version.
+
+    The column is built here rather than declared in ``list_display`` because it
+    holds a per-request reading: a column instance on the viewset would be built
+    once at import and would then serve the first request's answer to every
+    request after it, for the life of the process.
+    """
+
+    #: The column whose answer this one qualifies. Beside it rather than at the
+    #: end, because the pair is the point — "published N, resident N" is one
+    #: fact read across two cells, and a column between them would break it.
+    RESIDENCY_AFTER = "published_version"
+
+    def get_base_queryset(self):
+        """``area_key`` reaches through the catalog to the organisation, and a
+        listing page asks every row for one. Without this the column is a query
+        per row — which would undo, in the database, exactly what the single
+        status read buys on the network."""
+        return super().get_base_queryset().select_related("collection__catalog__organisation")
+
+    @cached_property
+    def columns(self):
+        columns = list(super().columns)
+        residency = ResidencyColumn("resident", label=_("Resident"))
+        after = next(
+            (index for index, column in enumerate(columns) if column.name == self.RESIDENCY_AFTER),
+            len(columns) - 1,
+        )
+        columns.insert(after + 1, residency)
+        return columns
+
+
 class FortiPublicationCreateView(ForecastCollectionsOnlyMixin, CreateView):
     pass
 
@@ -128,6 +205,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     menu_label = "Forti publications"
     list_display = ["slug", "collection", "visibility", "status", "published_version", "built_at"]
     list_filter = ["status", "visibility", "is_enabled"]
+    index_view_class = FortiPublicationIndexView
     add_view_class = FortiPublicationCreateView
     edit_view_class = FortiPublicationEditView
     panels = [

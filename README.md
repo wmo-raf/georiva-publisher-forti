@@ -328,7 +328,7 @@ so core ships no `GEORIVA_FORTI_*` setting at all.
 | `GEORIVA_FORTI_TIMEOUT` | `5` | seconds; jsonfrontend gives its own upstream 1.5 s |
 | `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | per caller per organisation; `None` disables |
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be shared |
-| `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the verification panel gives the bucket, all reads together |
+| `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the verification panel and the publications listing give the bucket, all reads together |
 
 **The model is the resource, and it is also the tenant boundary.** The path
 selects one `FortiPublication`; the view sends exactly one `area={org}.{slug}`
@@ -430,15 +430,36 @@ what somebody typed.
 
 Every figure on the page is instance-wide — `rawdataforecaster.json` names every
 organisation's area keys, one sha describes one document governing every tenant —
-which is why it is the instance admin's page and not an organisation's. An
-organisation administrator consequently cannot see whether their own model is
-resident; that question belongs beside the publication, whose organisation is
-known.
+which is why it is the instance admin's page and not an organisation's. What an
+organisation administrator needs from it is on the publications listing instead;
+see below.
 
 The reads are done on request, all of them inside one worker thread under one
 deadline (`GEORIVA_FORTI_VERIFICATION_DEADLINE`, 5 s), and nothing is cached. A
 page that says it could not ask beats one that holds an admin worker through
 botocore's retry ladder.
+
+### Resident, on the publications listing
+
+**Snippets → Forti publications** carries a **Resident** column beside
+**Published version**, and an organisation administrator sees it for their own
+publications. Published and resident are two facts: the database says a version
+was written, and `rawdataforecaster` says which version it is actually holding.
+The column is the difference, in one word — *agrees*, *differs*, *not yet*,
+*could not read*, *cannot say* — with the resident version beside it and the
+whole sentence on hover.
+
+An **area row narrows safely and a configuration digest does not**, which is why
+this can be an organisation's view while the panel above stays the instance
+admin's: a row is one area key, one version and one organisation, where a sha
+describes one document governing every tenant. `verification.resident_areas()`
+reads the same status document the panel reads, through the same guard and under
+the same deadline, and answers one publication at a time — so a cell can only
+ever ask about the area its own row already holds.
+
+The status document lists every area at once, so the whole listing is served by
+**one** read rather than one per row: a read per row would put object storage's
+deadline on the page instead of on the read.
 
 ## Tests
 

@@ -11,10 +11,13 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import rasterio
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from rasterio.transform import from_origin
 
 from georiva.core.models import Asset, Catalog, Collection, Item, Unit, Variable
 from georiva.ingestion.models import RunIngestion
+from georiva.organisations.models import OrganisationMembership
 from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, join_org, make_organisation
 from georiva_publisher_forti.models import FortiPublication
 
@@ -110,6 +113,38 @@ def make_user(username, *, superuser, org_slug=DEFAULT_TEST_ORG_SLUG):
         is_superuser=superuser,
     )
     join_org(user, org_slug)
+    return user
+
+
+def make_org_admin(username, org_slug=DEFAULT_TEST_ORG_SLUG):
+    """An organisation's administrator: admin access, no instance-wide powers.
+
+    The audience the publications listing is for, and the one a superuser
+    fixture cannot stand in for — every access question this plugin has is about
+    the gap between "may reach the Wagtail admin" and "may see the whole
+    instance", and a test signed in as a superuser cannot see that gap at all.
+
+    The Wagtail permissions are a group rather than the membership role: the
+    membership is what the tenancy middleware reads, and the group is what
+    Wagtail's own view permission checks read. Both are needed, and they are
+    different mechanisms answering different questions.
+    """
+    user = get_user_model().objects.create_user(
+        username=username,
+        email=f"{username}@example.org",
+        password="not-a-real-password",
+        is_staff=True,
+        is_superuser=False,
+    )
+    join_org(user, org_slug, role=OrganisationMembership.Role.ADMIN)
+
+    group = Group.objects.create(name=f"{username}-publications")
+    publications = ContentType.objects.get_for_model(FortiPublication)
+    group.permissions.add(
+        Permission.objects.get(codename="access_admin", content_type__app_label="wagtailadmin"),
+        *Permission.objects.filter(content_type=publications),
+    )
+    user.groups.add(group)
     return user
 
 
