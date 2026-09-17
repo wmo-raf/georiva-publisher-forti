@@ -123,7 +123,11 @@ met.no's **production** vocabulary, read from the `jsonformat.json` baked into
 their shipped image — not `forti-prep`'s, which emits `precipitation_amount_6h`
 and `air_temperature_max`.
 
-| GeoRiva | Forti internal | locationforecast | group | offset |
+The **GeoRiva** column is the *slot* — the role a variable fills, named after the
+ECMWF shortName that fills it by default. Which variable actually fills it is per
+publication and editable; see [The variable mapping](#the-variable-mapping).
+
+| GeoRiva slot | Forti internal | locationforecast | group | offset |
 |---|---|---|---|---|
 | `2t` | `air_temperature_2m` | `air_temperature` | instant | 0 |
 | `2d` | `dew_point_temperature_2m` | `dew_point_temperature` | instant | 0 |
@@ -150,6 +154,63 @@ without interpreting them. The planner instead refuses a variable whose unit is
 not the one the map publishes: a collection retuned from `°C` to `K` would
 otherwise publish a number wrong by 273 under a label that says celsius. Compared
 through pint, so `°C` and `degC` agree and `K` does not.
+
+## The variable mapping
+
+Eight of the fifteen parameters are derived after the transpose and read no
+variable of their own. The other seven, plus `tp` — which no parameter publishes
+directly and four derivations read — are the **eight slots** a publication maps.
+The set is fixed, derived from the parameter map in `parameters.py`, and is not a
+list an operator adds to: what is editable is the variable in each row.
+
+```bash
+georiva shell -c "
+from georiva_publisher_forti.models import FortiPublication
+p = FortiPublication.objects.get(slug='ecmwf-ifs')
+for slot, variable in p.mapped_variables().items():
+    print(slot, '->', variable.slug if variable else '(blank)')
+print('not ready:', p.unmapped_slots())
+"
+```
+
+A new publication is seeded by **slug auto-match** — the rule the planner used
+before the mapping existed — so a collection using the conventional names needs
+no configuration at all, and editing is purely an override. A collection that
+names its variables otherwise gets blank rows to fill in rather than a refusal it
+can do nothing about.
+
+A **blank slot** saves and is reported as not ready; the publish is refused by
+slot name. A slot whose variable carries the **wrong unit** is refused at both
+the mapping and the planner. Neither refusal can catch the confusion that
+matters: dew point mapped into the air-temperature slot is celsius into celsius,
+and every layer downstream agrees.
+
+Filling a slot in, until #13 gives it a form:
+
+```bash
+georiva shell -c "
+from georiva_publisher_forti.models import FortiPublication
+p = FortiPublication.objects.get(slug='ecmwf-ifs')
+row = p.variable_mappings.get(slot='2t')
+row.variable = p.collection.variables.get(slug='temperature-2m')
+row.full_clean()   # the unit check, before the write rather than after
+row.save()
+"
+```
+
+A publication created before its collection declares its variables is seeded with
+eight blank rows, and they are **not** re-matched later — auto-match runs once, at
+creation, because re-running it would undo a deliberate edit. Such a publication
+is filled in by hand, as above.
+
+Changing a mapping **raises the generation and marks the publication stale**, so
+the next publish outranks the last and the sweep picks it up within five minutes
+rather than at the next run. Saving a row that did not change counts for nothing. An edit made while a build is already in flight is
+the exception — that build finishes under the old mapping, and the correction
+lands at the next run instead. Deleting a variable a publication maps is refused
+by the database; `variable.forti_slots` answers which publications read it.
+
+See `docs/adr/0004-the-variable-mapping-is-data.md`.
 
 ## Derivations
 
@@ -212,7 +273,8 @@ has a reader following its last good version.
 ### Republishing one run after a configuration change
 
 A run's version cannot express "same run, different bytes", so the publication
-carries a **generation** beside it. Raise it by one and republish:
+carries a **generation** beside it. A mapping edit raises it by itself; for any
+other configuration change, raise it by hand and republish:
 
 ```bash
 georiva shell -c "

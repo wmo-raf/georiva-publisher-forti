@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 
 from django.test import TestCase
 
-from georiva.core.models import Collection, Unit
+from georiva.core.models import Asset, Collection, Unit, Variable
 from georiva_publisher_forti.models import GENERATIONS_PER_REVISION, FortiPublication
 from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
 
@@ -121,8 +121,20 @@ class StepIntersectionTests(PlannerTestCase):
 
 
 class SourceValidationTests(PlannerTestCase):
-    def test_a_missing_variable_is_refused_by_name(self):
-        self.collection.variables.filter(slug="tcc").delete()
+    """What the mapping has to say before anything is read.
+
+    The plan is pure database, so every refusal here costs milliseconds and
+    arrives before the first of ~70 MB of windowed raster reads.
+    """
+
+    def _remap(self, slot, variable):
+        self.publication.variable_mappings.filter(slot=slot).update(variable=variable)
+
+    def test_a_blank_slot_is_refused_by_name(self):
+        """The refusal a missing variable used to give. It now names the *slot*
+        an operator fills in rather than the variable they would have to rename
+        the rest of the instance to create."""
+        self._remap("tcc", None)
         write_cogs(self.collection, self.path)
         make_run(self.collection)
 
@@ -144,6 +156,65 @@ class SourceValidationTests(PlannerTestCase):
 
         self.assertIn("2t", str(ctx.exception))
         self.assertIn("without converting", str(ctx.exception))
+
+    def test_the_unit_check_follows_the_mapping_rather_than_the_slug(self):
+        """A variable named anything at all is checked against the slot it was
+        mapped into — which is the only unit that can be compared, now that the
+        name no longer says what the value means."""
+        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
+        write_cogs(self.collection, self.path)
+        self._remap("2t", _renamed_copy_of(self.collection, "2t", "temperature-2m", unit=kelvin))
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("temperature-2m", str(ctx.exception))
+
+    def test_two_spellings_of_one_unit_agree(self):
+        """``°C`` and ``degC`` depend on which seed wrote the row and are the
+        same unit; kelvin is compatible with both and is not."""
+        degrees, _ = Unit.objects.get_or_create(symbol="°C", defaults={"name": "Celsius (degree sign)"})
+        variable = self.collection.variables.get(slug="2t")
+        variable.unit = degrees
+        variable.save(update_fields=["unit"])
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        self.assertEqual(plan(self.publication).step_count, 9)
+
+    def test_a_slot_mapped_outside_the_collection_is_refused(self):
+        other = make_collection(slug="other-surface")
+        self._remap("2t", other.variables.get(slug="2t"))
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("outside", str(ctx.exception))
+
+    def test_a_variable_named_anything_publishes_once_it_is_mapped(self):
+        """The whole point: a collection that does not use GeoRiva's
+        conventional slugs was unpublishable and is now a mapping away."""
+        write_cogs(self.collection, self.path)
+        renamed = _renamed_copy_of(self.collection, "2t", "temperature-2m")
+        self._remap("2t", renamed)
+        self.collection.variables.get(slug="2t").delete()
+        make_run(self.collection)
+
+        self.assertEqual(plan(self.publication).step_count, 9)
+
+    def test_one_variable_may_fill_two_slots(self):
+        """Legal, suspicious, and not this seam's to refuse — the hrefs have to
+        reach both slots rather than whichever the query returned last."""
+        self._remap("2d", self.collection.variables.get(slug="2t"))
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        publish_plan = plan(self.publication)
+
+        self.assertEqual(publish_plan.hrefs["2d"], publish_plan.hrefs["2t"])
 
     def test_a_non_public_collection_is_refused(self):
         self.collection.visibility = Collection.Visibility.PRIVATE
@@ -183,6 +254,18 @@ class ParameterSelectionTests(PlannerTestCase):
         make_run(self.collection)
 
         self.assertEqual(plan(self.publication).fingerprint, plan(self.publication).fingerprint)
+
+    def test_the_fingerprint_changes_when_the_mapping_does(self):
+        """The same run read through a different variable is different bytes,
+        and a skip check that could not tell would decline to write them."""
+        write_cogs(self.collection, self.path)
+        other = _renamed_copy_of(self.collection, "2t", "temperature-2m")
+        make_run(self.collection)
+        before = plan(self.publication).fingerprint
+
+        self.publication.variable_mappings.filter(slot="2t").update(variable=other)
+
+        self.assertNotEqual(plan(self.publication).fingerprint, before)
 
 
 class TimeUntilNextTests(PlannerTestCase):
@@ -390,3 +473,25 @@ class GenerationTests(PlannerTestCase):
         self._raise_generation(1)
 
         self.assertFalse(self.publication.is_up_to_date(plan(self.publication).fingerprint))
+
+
+def _renamed_copy_of(collection, source: str, slug: str, unit=None):
+    """The same variable under a name the parameter map has never heard of.
+
+    What a mapping is *for*: a collection that calls its 2-metre temperature
+    something else. Same COGs, so every step still resolves and only the name —
+    and optionally the unit — differs. Called after ``write_cogs``, which knows
+    a constant for each conventional slug and nothing about this one.
+    """
+    original = collection.variables.get(slug=source)
+    copy = Variable.objects.create(
+        collection=collection,
+        slug=slug,
+        name=slug,
+        unit=unit or original.unit,
+        value_min=original.value_min,
+        value_max=original.value_max,
+    )
+    for asset in Asset.objects.filter(item__collection=collection, variable=original):
+        Asset.objects.get_or_create(item=asset.item, variable=copy, href=asset.href, format=Asset.Format.COG)
+    return copy

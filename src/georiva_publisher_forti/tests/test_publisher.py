@@ -281,6 +281,56 @@ class RepublishTests(PublishTestCase):
             second["version"],
         )
 
+    def test_remapping_a_slot_reaches_the_bucket_at_a_greater_stamp(self):
+        """The whole of #12, end to end and with no user interface.
+
+        Nothing about the run moves — same reference time, same revision, same
+        steps — and the bytes are different because a slot now reads a different
+        variable. The edit raises the generation by itself, so the pointer the
+        reader polls moves without anybody performing the two-step.
+        """
+        first = publish(self.publication)
+
+        row = self.reread().variable_mappings.get(slot="2d")
+        row.variable = self.collection.variables.get(slug="2t")
+        row.save()
+
+        second = publish(self.reread())
+
+        self.assertFalse(second["skipped"])
+        self.assertGreater(second["version"], first["version"])
+        self.assertEqual(
+            int(self.sink().read_bytes(f"latest/{self.area_key}").decode()),
+            second["version"],
+        )
+
+    def test_a_remapped_slot_publishes_the_variable_it_was_given(self):
+        """The stamp moving is only half of it — the dew point series has to
+        actually hold what the temperature variable holds, or the publication
+        advertises a correction it did not make."""
+        publish(self.publication)
+        row = self.reread().variable_mappings.get(slot="2d")
+        row.variable = self.collection.variables.get(slug="2t")
+        row.save()
+
+        version = publish(self.reread())["version"]
+
+        self.assertEqual(
+            self._first_value(version, "dew_point_temperature_2m"),
+            self._first_value(version, "air_temperature_2m"),
+        )
+
+    def _first_value(self, version, parameter):
+        """One parameter's first value at the first point, as the reader finds
+        it: ``point * number_of_points + slice_from + step``."""
+        sink = self.sink()
+        prefix = f"{self.area_key}/{version}"
+        grid = next(name for name in sink.children(prefix))
+        meta = json.loads(sink.read_bytes(f"{prefix}/{grid}/meta.json").decode())
+        entry = meta["parameters"][parameter]
+        data = np.frombuffer(sink.read_bytes(f"{prefix}/{grid}/data"), dtype="<i2")
+        return data[entry["slice_from"]] * entry["scale_factor"]
+
     def test_the_raised_generation_leaves_a_second_version_directory(self):
         """The pointer moving is only half of it — the bytes it names have to be
         somewhere the reader can fetch them from."""

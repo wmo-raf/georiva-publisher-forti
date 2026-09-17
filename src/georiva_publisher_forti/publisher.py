@@ -160,7 +160,12 @@ def _refresh_config(publication) -> None:
 
 
 def _read(publication, publish_plan):
-    """The grid, and every source variable's ``(time, point)`` cube."""
+    """The grid, and one ``(time, point)`` cube per slot.
+
+    Keyed by **slot**, not by variable slug, which is what lets everything below
+    go on saying ``cubes["2t"]`` while the variable behind that slot is whatever
+    the publication's mapping named.
+    """
     item = latest_item_geometry(publication.collection, publish_plan.reference_time)
     if item is None:
         raise NothingToPublish(f"{publication.collection.slug} has no item for {publish_plan.reference_time}")
@@ -177,7 +182,7 @@ def _read(publication, publish_plan):
             f"or the source raster's geometry moved; both invalidate every stored ordinal."
         )
 
-    cubes = {slug: reader.read_series(hrefs) for slug, hrefs in publish_plan.hrefs.items()}
+    cubes = {slot: reader.read_series(hrefs) for slot, hrefs in publish_plan.hrefs.items()}
     return grid, cubes
 
 
