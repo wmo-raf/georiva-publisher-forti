@@ -179,8 +179,8 @@ no configuration at all, and editing is purely an override. A collection that
 names its variables otherwise gets blank rows to fill in rather than a refusal it
 can do nothing about.
 
-A **blank slot** saves and is reported as not ready; the publish is refused by
-slot name. A slot whose variable carries the **wrong unit** is refused at both
+A **blank slot** saves and is reported as not ready by the Readiness section
+above the mapping; the publish is refused by slot name. A slot whose variable carries the **wrong unit** is refused at both
 the mapping and the planner. Neither refusal can catch the confusion that
 matters: dew point mapped into the air-temperature slot is celsius into celsius,
 and every layer downstream agrees.
@@ -251,6 +251,51 @@ by the database; `variable.forti_slots` answers which publications read it.
 See `docs/adr/0004-the-variable-mapping-is-data.md` and
 `docs/adr/0005-the-mapping-editor-states-what-it-did-not-check.md`.
 
+## Readiness
+
+**Snippets → Forti publications → *one model*** opens with a **Readiness**
+section: what a publish would meet, read from the database before anything is
+written, and before the form is saved. Every fact in it was discoverable before
+only by publishing — one refusal at a time, into a build log nothing rendered.
+
+Six findings, in the order an operator meets them:
+
+| finding | what it answers |
+|---|---|
+| Forecast collection | whether the collection is one at all — the chooser guards this, and a collection can be changed under a publication afterwards |
+| Collection visibility | whether a reader presenting no credential may read it; the build refuses anything but `public` |
+| Closed runs | how many have closed and when the latest was |
+| Slot coverage | whether every slot names a variable of this collection |
+| Units | whether each filled slot carries the unit its parameter publishes |
+| Steps the latest run would publish | the size of the step intersection, counted through the planner's own two functions |
+
+Each carries one of five states, and **the distinction that matters is between
+two of them**:
+
+- **not ready yet** — nothing is misconfigured and waiting is the correct action.
+  A collection set up the afternoon before its first ingestion is here;
+- **needs a change** — waiting fixes nothing, and every hour spent waiting is an
+  hour the model is not served. A blank slot is here;
+- **still ingesting** — it publishes *now*, and would publish more steps once
+  the run's stragglers land. The count says `8 of 9` rather than `8`;
+- **cannot say yet** — a finding downstream of one of the above, with nothing
+  wrong of its own. The step count of a publication with a blank slot is this,
+  not a second fault;
+- **ready**.
+
+The whole section's verdict is its **worst** finding's state, derived rather than
+stored so that the summary and the rows cannot disagree.
+
+It reads the database and nothing else — no bucket, no status document, no
+raster — for the same reason the history panel does: an edit form behind object
+storage's deadline cannot be used to correct a bbox while the bucket is slow.
+
+And it says nothing about whether the bytes would be *right*. Dew point in the
+air-temperature slot passes all six findings; what the form did and did not check
+is stated in the mapping section immediately below.
+
+See `docs/adr/0006-readiness-tells-not-yet-from-never.md`.
+
 ## Derivations
 
 Computed **after** the transpose, over a contiguous per-point time series — a few
@@ -278,9 +323,12 @@ One publication per collection, in the Wagtail admin under **Forti publications*
   `RunIngestion` for any other kind, so a publication over one would wait forever
   for a run that never comes. The rule is in `clean()` as well as in the chooser,
   so a posted id meets it too. An `internal` collection is refused for a
-  different reason: it is a derivation intermediate, not a dataset. `private` is
-  fine — the reader holds no credential, but the Django view in front of it does
-  know who is asking (D18).
+  different reason: it is a derivation intermediate, not a dataset. A `private`
+  collection saves and does **not** publish: the serving plane can narrow a
+  private model to its organisation (D18), but `planner.plan` refuses any
+  collection that is not `public` outright, on the ground that the reader itself
+  holds no credential. Readiness reports that refusal on the form rather than
+  leaving it to the first build.
 - **Area** — the name readers ask for, unique within the organisation. A
   *missing* `latest/<area>` reads as version **0** and sends the reader looking
   for `<area>/0/complete.json`: fatal at startup, and the error does not mention

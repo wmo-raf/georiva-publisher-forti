@@ -142,8 +142,8 @@ def plan(publication) -> PublishPlan:
 
     by_slot = _resolve_slots(publication)
 
-    hrefs_by_slot = _cog_hrefs(collection, run.reference_time, by_slot)
-    times = _shared_times(hrefs_by_slot)
+    hrefs_by_slot = cog_hrefs(collection, run.reference_time, by_slot)
+    times = shared_times(hrefs_by_slot)
     if not times:
         raise NothingToPublish(
             f"{collection.slug} @ {run.reference_time:%Y-%m-%dT%H:%MZ}: no timestep has a COG "
@@ -284,8 +284,14 @@ def _resolve_slots(publication) -> dict:
     return by_slot
 
 
-def _cog_hrefs(collection, reference_time, by_slot) -> dict:
+def cog_hrefs(collection, reference_time, by_slot) -> dict:
     """``{slot key: {time: href}}`` for one run's COG assets.
+
+    Public because :mod:`~.readiness` asks the same question ahead of a publish
+    rather than during one, and the step count it reports has to be the count
+    this produces. Two readings of "which COGs does this run have" is the
+    arrangement in which the form promises a number the build then disagrees
+    with.
 
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
@@ -310,7 +316,7 @@ def _cog_hrefs(collection, reference_time, by_slot) -> dict:
     return hrefs
 
 
-def _shared_times(hrefs_by_slot) -> list:
+def shared_times(hrefs_by_slot) -> list:
     """The timesteps every slot has, in order."""
     if not hrefs_by_slot:
         return []

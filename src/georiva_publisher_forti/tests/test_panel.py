@@ -39,7 +39,7 @@ from django.utils import timezone
 from georiva.organisations.testing import dial_org
 from georiva_publisher_forti.models import FortiPublication, FortiPublicationBuildLog, instance_sink
 
-from .factories import make_collection, make_org_admin, make_publication, make_user
+from .factories import make_collection, make_org_admin, make_publication, make_run, make_user
 from .sink_isolation import TemporarySinkMixin
 from .status_documents import write_forecaster
 
@@ -519,3 +519,60 @@ class PublicationHistoryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(exists.call_count, 0)
         self.assertEqual(read_json.call_count, 0)
+
+
+class PublicationReadinessTests(TestCase):
+    """Readiness beside the form, asserted thinly and once.
+
+    Every distinction this section draws belongs to :mod:`~.tests.test_readiness`
+    and is tested there, on the data, without rendering anything. What is left
+    for this class is the three things only a page can be wrong about: that the
+    section is on the page an operator configures a publication from, that it
+    carries the module's own words rather than a second set composed in a
+    template, and that it is absent from the add form, where there is no
+    publication to be ready.
+
+    No sink mixin and no status document, for the reason
+    :class:`PublicationHistoryTests` gives: this reads the database and nothing
+    else, and the edit page's one remote-read assertion already covers the whole
+    page it is now part of.
+    """
+
+    def setUp(self):
+        dial_org(self.client)
+        self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
+        self.url = reverse(
+            "wagtailsnippets_georiva_publisher_forti_fortipublication:edit",
+            args=[self.publication.pk],
+        )
+        self.client.force_login(make_org_admin("org-admin"))
+
+    def test_a_publication_waiting_for_its_first_run_says_so_before_saving(self):
+        """The state every publication is born in. An operator who reads "not
+        ready yet" here waits, which is the correct action and the one no
+        surface offered before."""
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "not ready yet")
+        self.assertContains(response, "no closed run")
+
+    def test_a_blank_slot_reads_as_a_change_rather_than_a_wait(self):
+        """The distinction, on the page. Both halves are here at once: the run
+        has closed, so waiting is finished, and the mapping has a hole nothing
+        but an operator will fill."""
+        make_run(self.publication.collection)
+        self.publication.variable_mappings.filter(slot="2t").update(variable=None)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "needs a change")
+        self.assertContains(response, "Nothing is mapped to 2t")
+
+    def test_the_form_for_a_publication_that_does_not_exist_yet_has_no_readiness(self):
+        """There is no publication to be ready, and no collection to be ready
+        *of* — the add form's collection is chosen on the form itself."""
+        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "not ready yet")

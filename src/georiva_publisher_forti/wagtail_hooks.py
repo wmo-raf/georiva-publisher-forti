@@ -47,11 +47,14 @@ one version and one organisation; a configuration sha describes one document
 governing every tenant and narrows to nobody. That difference is the whole of
 why one of these is an organisation's and the other is not.
 
-The last surface is :class:`PublishHistoryPanel`, and it is the only one that
-asks nothing of the serving plane: what a publication has *attempted* is a
-question the database answers on its own. It therefore sits where an operator
-already is when they ask it — on the publication's own page — and inherits that
-page's narrowing rather than declaring a second one.
+The last two surfaces — :class:`ReadinessPanel` and :class:`PublishHistoryPanel`
+— are the only ones that ask nothing of the serving plane: whether a publication
+*would* publish and what it has *attempted* are both questions the database
+answers on its own. They therefore sit where an operator already is when they ask
+them — on the publication's own page — and inherit that page's narrowing rather
+than declaring a second one. They are also the pair an operator reads in order:
+what a publish would meet, at the top of the form, and what publishes have
+actually done, at the foot of it.
 """
 
 import logging
@@ -72,7 +75,7 @@ from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, Sni
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
-from . import forms, history, verification
+from . import forms, history, readiness, verification
 from .models import FortiPublication
 
 logger = logging.getLogger(__name__)
@@ -201,6 +204,47 @@ class VariableMappingPanel(Panel):
             return context
 
 
+class ReadinessPanel(Panel):
+    """Whether this publication would publish, beside the form it is configured on.
+
+    The facts it renders were always discoverable and were only ever discovered
+    **by publishing** — into a build log nothing rendered, one refusal at a time,
+    in the order the planner happens to check them. An operator who had
+    configured a publication a day early and one who had left a slot blank read
+    the same page and waited the same way.
+
+    **On the publication's own page, above the mapping it reports on.** The
+    question is asked while configuring, and the row that most often answers it —
+    slot coverage — is about the section immediately below. Answer first, then
+    the thing to change.
+
+    **Hidden on the add form.** Readiness is a reading of a collection's runs and
+    a publication's mapping, and on the add form there is neither: the collection
+    is being chosen on the form itself and no mapping exists until creation seeds
+    one.
+
+    **It reads the database and nothing else**, exactly as
+    :class:`PublishHistoryPanel` does and for the same reason — an edit form
+    behind object storage's deadline is one that cannot be used to correct a bbox
+    while the bucket is slow.
+
+    Everything rendered is decided in :mod:`~.readiness`. See
+    :class:`PublishHistoryPanel` on why that split is the one this plugin keeps
+    making.
+    """
+
+    class BoundPanel(Panel.BoundPanel):
+        template_name = "georiva_publisher_forti/panels/readiness.html"
+
+        def is_shown(self):
+            return bool(self.instance and self.instance.pk and self.instance.collection_id)
+
+        def get_context_data(self, parent_context=None):
+            context = super().get_context_data(parent_context)
+            context["readiness"] = readiness.report(self.instance)
+            return context
+
+
 class PublishHistoryPanel(Panel):
     """Every attempt this publication has made, on the publication's own page.
 
@@ -312,6 +356,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                     "blank to take the catalog slug and the collection's own tier."
                 ),
             ),
+            ReadinessPanel(heading="Readiness", icon="clipboard-list"),
             VariableMappingPanel(heading="The variable mapping", icon="list-ul"),
             MultiFieldPanel(
                 [
