@@ -185,9 +185,27 @@ the mapping and the planner. Neither refusal can catch the confusion that
 matters: dew point mapped into the air-temperature slot is celsius into celsius,
 and every layer downstream agrees.
 
+Filling a slot in, until #13 gives it a form:
+
+```bash
+georiva shell -c "
+from georiva_publisher_forti.models import FortiPublication
+p = FortiPublication.objects.get(slug='ecmwf-ifs')
+row = p.variable_mappings.get(slot='2t')
+row.variable = p.collection.variables.get(slug='temperature-2m')
+row.full_clean()   # the unit check, before the write rather than after
+row.save()
+"
+```
+
+A publication created before its collection declares its variables is seeded with
+eight blank rows, and they are **not** re-matched later — auto-match runs once, at
+creation, because re-running it would undo a deliberate edit. Such a publication
+is filled in by hand, as above.
+
 Changing a mapping **raises the generation and marks the publication stale**, so
 the next publish outranks the last and the sweep picks it up within five minutes
-rather than at the next run. An edit made while a build is already in flight is
+rather than at the next run. Saving a row that did not change counts for nothing. An edit made while a build is already in flight is
 the exception — that build finishes under the old mapping, and the correction
 lands at the next run instead. Deleting a variable a publication maps is refused
 by the database; `variable.forti_slots` answers which publications read it.

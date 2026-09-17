@@ -99,9 +99,21 @@ loaded while every surface reports agreement. `mark_stale` is what makes there
 *be* a next publish before the next run closes, which for a twice-daily model is
 up to twelve hours away.
 
+A save that writes the variable the row already held is **not** a change and is
+not counted. #13's editor posts all eight rows at every submit, so counting saves
+rather than changes would raise the generation by eight a submit against a
+ceiling of ninety-nine that refuses to publish — twelve idle submits inside one
+run window and the model could not publish again until the next run. What the row
+held is read from the database, for the reason this codebase gives twice already
+on `published_version`: an in-memory copy is stale exactly when it matters.
+
 Seeding deliberately bypasses both, through `bulk_create`: a publication being
 born is not its bytes changing, and a first run published at generation 8 would
-carry a stamp claiming to be a correction of itself.
+carry a stamp claiming to be a correction of itself. Auto-match therefore runs
+**once**, at creation. A row that exists and is blank is never re-matched, because
+re-matching would undo a deliberate edit — so a publication configured ahead of
+the collection that will fill it is filled in by hand (the README gives the
+shell) rather than repaired silently later.
 
 ### The fingerprint covers the mapping
 
@@ -152,6 +164,11 @@ old mapping and marks itself ready, so the correction is delayed, never lost —
 the generation is already raised. Closing that window means making `mark_ready`
 conditional on the generation the plan was built from, which is a change to
 core's build discipline and is not this ticket's.
+
+**The mapping model declares its tenancy** as
+`publication__collection__catalog__organisation`, as both its siblings in that
+file do. A model that declares nothing cannot be scoped and raises (ADR 0011),
+and this one is reachable from core's `Variable` by its related name.
 
 **The mapping is still the only configuration the fingerprint sees**, beside the
 generation. `time_until_next_hours` remains an edit that republishes as up to

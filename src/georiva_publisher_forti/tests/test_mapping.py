@@ -155,7 +155,6 @@ class SeedingTests(TestCase):
         publication = make_publication(self.collection)
 
         self.assertEqual(publication.unmapped_slots(), [])
-        self.assertTrue(publication.mapping_is_complete)
 
 
 class MappingConstraintTests(TestCase):
@@ -283,3 +282,27 @@ class ConfigurationChangeTests(TestCase):
         self._remap(variable=self.collection.variables.get(slug="2t"))
 
         self.assertEqual(self.publication.generation, 2)
+
+    def test_saving_a_row_that_did_not_change_counts_for_nothing(self):
+        """The editor posts all eight rows at every submit. Counting saves
+        rather than changes would raise the generation by eight a submit
+        against a ceiling that refuses to publish — twelve idle submits inside
+        one run window and the model could not publish until the next run."""
+        for row in self.publication.variable_mappings.all():
+            row.save()
+        self.publication.refresh_from_db()
+
+        self.assertEqual(self.publication.generation, 0)
+        self.assertEqual(self.publication.status, FortiPublication.Status.READY)
+
+    def test_a_row_created_blank_still_counts(self):
+        """The slot was unanswered a moment ago and is answered now — by
+        nothing, which is an answer the planner acts on."""
+        self.publication.variable_mappings.filter(slot="2t").delete()
+        self.publication.refresh_from_db()
+        before = self.publication.generation
+
+        FortiVariableMapping.objects.create(publication=self.publication, slot="2t", variable=None)
+        self.publication.refresh_from_db()
+
+        self.assertEqual(self.publication.generation, before + 1)

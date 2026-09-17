@@ -39,7 +39,7 @@ from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
 from .models import GENERATIONS_PER_REVISION
-from .units import same_unit
+from .units import same_unit, symbol_of
 from .windows import publishable
 
 
@@ -240,11 +240,16 @@ def _resolve_slots(publication) -> dict:
     successfully: Forti copies units out of ``meta.json`` without interpreting
     them, so a slot filled from a variable in kelvin publishes a number wrong by
     273 under a label that says celsius, and every layer downstream agrees.
+
+    The last two are checked at the mapping too, and deliberately twice: that
+    check is what a form can show, and this one is what holds when nothing went
+    through a form — the shell, a migration, or a *publication* whose collection
+    was changed under mappings that were valid when they were made.
     """
     collection = publication.collection
     by_slot = publication.mapped_variables()
 
-    blank = [key for key, variable in by_slot.items() if variable is None]
+    blank = publication.unmapped_slots(by_slot)
     if blank:
         raise PublicationRefused(
             f"{publication.slug} has nothing mapped to {', '.join(blank)}. Every slot in the "
@@ -265,7 +270,7 @@ def _resolve_slots(publication) -> dict:
     wrong = []
     for key, variable in by_slot.items():
         want = params.BY_SLOT[key].units
-        have = variable.unit.symbol if variable.unit else None
+        have = symbol_of(variable)
         if not same_unit(have, want):
             wrong.append(f"{key} ← {variable.slug} is {have!r}, expected {want!r}")
     if wrong:

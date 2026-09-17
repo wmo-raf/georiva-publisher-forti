@@ -31,3 +31,15 @@ def same_unit(symbol: str | None, expected: str) -> bool:
         return str(ureg(symbol).u) == str(ureg(expected).u)
     except Exception:
         return False
+
+
+def symbol_of(variable) -> str | None:
+    """The unit symbol a variable carries, or ``None``.
+
+    Core declares ``Variable.unit`` non-nullable, so the guard is defensive
+    rather than expected — and it is here once rather than at each of the three
+    sites that compare a variable against a slot, none of which wants to be the
+    place that decided what a variable with no unit means.
+    """
+    unit = variable.unit if variable else None
+    return unit.symbol if unit else None

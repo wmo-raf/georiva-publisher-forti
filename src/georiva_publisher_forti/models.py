@@ -36,7 +36,7 @@ from georiva.core.models import Collection, visible_visibilities
 
 from . import parameters as params
 from .mapping import auto_match
-from .units import same_unit
+from .units import same_unit, symbol_of
 
 #: How many generations fit beneath one run revision — the place value the
 #: generation occupies in the published version, and therefore also the first
@@ -62,6 +62,11 @@ SINK_ROOT = "_forti"
 #: the engine, after the bytes, in that order.
 MARKER_PATTERNS = ("latest/*", "*/complete.json")
 
+
+#: Stands for "this row is not in the database yet" where ``None`` already means
+#: "mapped to nothing". Without it a row created blank compares equal to the
+#: nothing it came from and the slot becoming answerable would go uncounted.
+_NOT_STORED = object()
 
 #: How open each tier is. ``internal`` is here because a *collection* can be it,
 #: not because a publication can: the choices offer two tiers, so refusing the
@@ -623,8 +628,11 @@ class FortiPublication(BuildDisciplinedModel):
         that names its variables otherwise gets blank rows to fill in rather
         than a refusal it can do nothing about.
 
-        Only the *absent* slots. A row deliberately blanked stays blank: it
-        exists, and re-matching it would undo the edit at the next save.
+        Only the *absent* slots, which after the first call is none of them. A
+        row that exists and is blank stays blank — re-matching it would undo the
+        edit at the next save, and a publication configured ahead of the
+        collection that will fill it is therefore filled in by hand rather than
+        re-matched later. The README gives the shell for it; #13 gives the form.
 
         Written with ``bulk_create``, which is not an optimisation — it is what
         keeps seeding from going through
@@ -633,9 +641,6 @@ class FortiPublication(BuildDisciplinedModel):
         published at generation 8 would carry a stamp that says it is already a
         correction of itself.
         """
-        if not self.collection_id:
-            return 0
-
         existing = set(self.variable_mappings.values_list("slot", flat=True))
         matched = auto_match(self.collection.variables.all())
         missing = [
@@ -656,18 +661,19 @@ class FortiPublication(BuildDisciplinedModel):
         rows = {row.slot: row.variable for row in self.variable_mappings.select_related("variable", "variable__unit")}
         return {key: rows.get(key) for key in params.SLOT_KEYS}
 
-    def unmapped_slots(self) -> list[str]:
+    def unmapped_slots(self, mapped: dict | None = None) -> list[str]:
         """The slots nothing fills, in vocabulary order.
 
         A blank slot is allowed at save — a publication may be configured while
         its collection is still declaring its variables — and this is how it
         reads as not ready rather than as broken.
-        """
-        return [key for key, variable in self.mapped_variables().items() if variable is None]
 
-    @property
-    def mapping_is_complete(self) -> bool:
-        return not self.unmapped_slots()
+        ``mapped`` is for a caller that has already read
+        :meth:`mapped_variables` and would otherwise read it a second time to
+        ask a question the first read can answer.
+        """
+        mapped = self.mapped_variables() if mapped is None else mapped
+        return [key for key, variable in mapped.items() if variable is None]
 
     def register_configuration_change(self) -> None:
         """Raise the generation and ask for a republish.
@@ -745,6 +751,12 @@ class FortiVariableMapping(models.Model):
     every rename and every deletion.
     """
 
+    #: Through the publication, as the build log declares it through its own
+    #: target. A model that declares nothing cannot be scoped and raises
+    #: (ADR 0011), and this one is reachable from core's ``Variable`` by its
+    #: related name, so it is exactly the kind of row a scoping caller is handed.
+    ORGANISATION_LOOKUP = "publication__collection__catalog__organisation"
+
     publication = models.ForeignKey(
         FortiPublication,
         on_delete=models.CASCADE,
@@ -796,6 +808,11 @@ class FortiVariableMapping(models.Model):
         if self.variable is None:
             return
 
+        # Chained rather than collected, because both land on ``variable`` and
+        # the second would only overwrite the first — and the collection is the
+        # further-back fact, exactly as ``FortiPublication.clean`` chains the
+        # forecast condition ahead of the visibility pair. A variable from
+        # another collection has no unit worth comparing against this slot.
         errors = {}
         if self.publication_id and self.variable.collection_id != self.publication.collection_id:
             errors["variable"] = (
@@ -805,7 +822,7 @@ class FortiVariableMapping(models.Model):
             )
         elif not self._unit_agrees():
             slot = params.BY_SLOT[self.slot]
-            have = self.variable.unit.symbol if self.variable.unit else None
+            have = symbol_of(self.variable)
             errors["variable"] = (
                 f"{self.variable.slug!r} is in {have!r} and the {self.slot} slot publishes "
                 f"{slot.units!r}. Forti copies units out of meta.json without converting "
@@ -817,19 +834,46 @@ class FortiVariableMapping(models.Model):
             raise ValidationError(errors)
 
     def _unit_agrees(self) -> bool:
-        symbol = self.variable.unit.symbol if self.variable.unit else None
-        return same_unit(symbol, params.BY_SLOT[self.slot].units)
+        return same_unit(symbol_of(self.variable), params.BY_SLOT[self.slot].units)
 
     def save(self, *args, **kwargs):
-        """Save the row, then tell the publication its bytes have moved.
+        """Save the row, and tell the publication only if its bytes have moved.
 
-        Seeding is the one write that does not come through here — see
+        A save that writes the variable the row already held is not a
+        configuration change, and must not be counted as one. The editor of #13
+        posts all eight rows at every submit, so counting saves rather than
+        changes would raise the generation by eight per submit against a ceiling
+        of ninety-nine that **refuses to publish** — twelve idle submits inside
+        one run window and the model cannot publish again until the next run.
+
+        What it held is read from the database rather than remembered from
+        ``__init__``, for the reason this file gives twice already on
+        ``published_version``: an in-memory copy is stale exactly when it
+        matters, and a concurrent writer's value is the one that decides whether
+        these bytes are new.
+
+        Seeding does not come through here at all — see
         :meth:`FortiPublication.seed_mapping` — because a publication being born
-        is not a configuration change.
+        is not a configuration change either.
         """
+        was = self._stored_variable_id()
         result = super().save(*args, **kwargs)
-        self.publication.register_configuration_change()
+        if was != self.variable_id:
+            self.publication.register_configuration_change()
         return result
+
+    def _stored_variable_id(self):
+        """The variable this row holds in the database, or a sentinel for a row
+        that is not in it yet.
+
+        A row being *created* is a change whatever it holds: the slot was
+        unanswered a moment ago and is answered now. The sentinel is what keeps
+        that from reading as "unchanged" when the row is created blank.
+        """
+        if not self.pk:
+            return _NOT_STORED
+        stored = type(self).objects.filter(pk=self.pk).values_list("variable_id", flat=True)
+        return stored[0] if stored else _NOT_STORED
 
     def delete(self, *args, **kwargs):
         """A slot losing its row changes the bytes exactly as a remap does.

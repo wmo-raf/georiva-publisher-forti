@@ -12,6 +12,11 @@ bytes has changed. What follows is one byte-identical republish, since the
 fingerprint now covers the mapping; the same run under the same mapping produces
 the same output.
 
+This seeds the slot vocabulary **as it stands when the migration runs**, which is
+the right answer for a database migrating from scratch and not a backfill for one
+that has already run it: a slot added to the parameter map later needs its own
+migration, since ``seed_mapping`` only reaches publications created after it.
+
 A publication whose collection does not use the expected names comes out of this
 with blank rows rather than with nothing. That is the new state "configured but
 not finished", and it is exactly the state such a publication was already in —
@@ -82,5 +87,5 @@ class Migration(migrations.Migration):
                 'constraints': [models.UniqueConstraint(fields=('publication', 'slot'), name='unique_forti_slot_per_publication')],
             },
         ),
-            migrations.RunPython(seed_from_slug_match, drop_mapping),
+        migrations.RunPython(seed_from_slug_match, drop_mapping),
     ]
