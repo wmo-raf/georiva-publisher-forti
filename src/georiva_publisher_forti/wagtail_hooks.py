@@ -65,14 +65,14 @@ from django.utils.translation import gettext_lazy as _
 from wagtail import hooks
 from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
-from wagtail.admin.panels import FieldPanel, MultiFieldPanel, Panel
+from wagtail.admin.panels import FieldPanel, MultiFieldPanel, ObjectList, Panel
 from wagtail.admin.ui.tables import Column
 from wagtail.snippets.models import register_snippet
 from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, SnippetViewSet
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
-from . import history, verification
+from . import forms, history, verification
 from .models import FortiPublication
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,43 @@ class ResidencyColumn(Column):
 
     def get_value(self, instance):
         return self.resident.of(instance)
+
+
+class VariableMappingPanel(Panel):
+    """The eight slots, on the page that knows which collection they are of.
+
+    **A panel over eight fields, not an inline panel.** The slot set is fixed by
+    the format — derived from the parameter map, not typed out — so there is
+    nothing to add and nothing to remove. An ``InlinePanel`` would offer both,
+    and an operator who used either would find the publish refused by a slot
+    that is missing or duplicated, over a shape the mapping cannot take.
+
+    **Hidden on the add form.** A slot chooses between the variables of *this
+    publication's* collection, and on the add form there is no collection yet.
+    Creation seeds all eight rows by slug auto-match, which is the rule the
+    planner used before the mapping was data, so the common case still asks for
+    no decisions at all and this page is where the uncommon one is answered.
+
+    Everything rendered here is decided in :mod:`~.forms` — which slots warn,
+    which were refused, which are unfilled, and what the form is entitled to
+    claim it checked. See :class:`PublishHistoryPanel` on why that split is the
+    one this plugin keeps making.
+    """
+
+    class BoundPanel(Panel.BoundPanel):
+        template_name = "georiva_publisher_forti/panels/variable_mapping.html"
+
+        def is_shown(self):
+            return bool(self.form and self.form.has_mapping)
+
+        def get_context_data(self, parent_context=None):
+            context = super().get_context_data(parent_context)
+            context["rows"] = self.form.mapping_rows()
+            context["acknowledgement"] = self.form.acknowledgement
+            context["incomplete_label"] = forms.INCOMPLETE_LABEL
+            context["checks_made"] = forms.CHECKS_MADE
+            context["checks_not_made"] = forms.CHECKS_NOT_MADE
+            return context
 
 
 class PublishHistoryPanel(Panel):
@@ -254,50 +291,58 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     index_view_class = FortiPublicationIndexView
     add_view_class = FortiPublicationCreateView
     edit_view_class = FortiPublicationEditView
-    panels = [
-        MultiFieldPanel(
-            [
-                FieldPanel("collection"),
-                FieldPanel("slug"),
-                FieldPanel("visibility"),
-                FieldPanel("is_enabled"),
-            ],
-            heading="What is published",
-            help_text=(
-                "The slug is the name a consumer asks by — GET /api/forecast/"
-                "{slug}/ — and a segment of every storage key, so it is fixed "
-                "once this model has published. Leave it and the visibility "
-                "blank to take the catalog slug and the collection's own tier."
+    # An ``ObjectList`` rather than ``panels``, for the one thing only it can
+    # carry: the base form class. The eight slot choosers are fields of the form
+    # rather than of the model — the mapping is a related table — so they have to
+    # arrive with the form class the panel tree is built from.
+    edit_handler = ObjectList(
+        [
+            MultiFieldPanel(
+                [
+                    FieldPanel("collection"),
+                    FieldPanel("slug"),
+                    FieldPanel("visibility"),
+                    FieldPanel("is_enabled"),
+                ],
+                heading="What is published",
+                help_text=(
+                    "The slug is the name a consumer asks by — GET /api/forecast/"
+                    "{slug}/ — and a segment of every storage key, so it is fixed "
+                    "once this model has published. Leave it and the visibility "
+                    "blank to take the catalog slug and the collection's own tier."
+                ),
             ),
-        ),
-        MultiFieldPanel(
-            [
-                FieldPanel("west"),
-                FieldPanel("south"),
-                FieldPanel("east"),
-                FieldPanel("north"),
-            ],
-            heading="Extent",
-            help_text=(
-                "The points that exist. Give it a margin past the area you care "
-                "about: a border town is asked for from both sides, and an area "
-                "that stops at the boundary answers 'outside coverage' to half of "
-                "them. Changing this changes the point list, which is pinned — "
-                "the next build refuses rather than republishing under a grid "
-                "that moved."
+            VariableMappingPanel(heading="The variable mapping", icon="list-ul"),
+            MultiFieldPanel(
+                [
+                    FieldPanel("west"),
+                    FieldPanel("south"),
+                    FieldPanel("east"),
+                    FieldPanel("north"),
+                ],
+                heading="Extent",
+                help_text=(
+                    "The points that exist. Give it a margin past the area you care "
+                    "about: a border town is asked for from both sides, and an area "
+                    "that stops at the boundary answers 'outside coverage' to half of "
+                    "them. Changing this changes the point list, which is pinned — "
+                    "the next build refuses rather than republishing under a grid "
+                    "that moved."
+                ),
             ),
-        ),
-        MultiFieldPanel(
-            [
-                FieldPanel("time_until_next_hours"),
-                FieldPanel("generation"),
-            ],
-            heading="Advanced",
-        ),
-        FieldPanel("status", read_only=True),
-        FieldPanel("error", read_only=True),
-        PublishHistoryPanel(heading="History", icon="history"),
-    ]
+            MultiFieldPanel(
+                [
+                    FieldPanel("time_until_next_hours"),
+                    FieldPanel("generation"),
+                ],
+                heading="Advanced",
+            ),
+            FieldPanel("status", read_only=True),
+            FieldPanel("error", read_only=True),
+            PublishHistoryPanel(heading="History", icon="history"),
+        ],
+        base_form_class=forms.FortiPublicationForm,
+    )
 
 
 register_snippet(FortiPublicationViewSet)

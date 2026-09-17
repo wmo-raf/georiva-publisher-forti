@@ -284,6 +284,43 @@ DERIVED_INPUT_UNITS = {
     "tp": "mm",
 }
 
+#: What each slot's values plausibly span, in the slot's own unit — generous on
+#: purpose, because this is the loose half of a pair whose other half is exact.
+#:
+#: The unit check refuses kelvin under a celsius label. It cannot see the same
+#: mistake made one layer up: a variable whose unit row *says* ``degC`` while its
+#: numbers are kelvin agrees with the slot and publishes 297 degrees. What is
+#: left to notice it with is the variable's declared range, which core documents
+#: as a styling hint — "minimum expected data value … used for color mapping" —
+#: and which is therefore evidence rather than proof. So the bounds below are
+#: drawn wide enough that only a range sharing *no value at all* with them is
+#: remarkable, and the comparison that reads them (:func:`~.mapping.concerns`)
+#: warns rather than refuses.
+#:
+#: Declared for every slot, and checked below, for the same reason the unit is:
+#: a slot silently missing one is not loudly wrong, it is quietly unsuspectable.
+PLAUSIBLE_RANGES = {
+    # Vostok read −89.2 °C and Furnace Creek 56.7 °C; a forecast field is
+    # narrower than either, and neither margin costs anything.
+    "2t": (-90.0, 60.0),
+    # Dew point cannot exceed the air temperature it accompanies, and the warm
+    # end of it is bounded by how much water air can hold.
+    "2d": (-90.0, 40.0),
+    # 870 hPa in the eye of Tip, 1084 hPa over Siberia — both at sea level,
+    # which is what this slot reduces to.
+    "msl": (850.0, 1100.0),
+    # A sustained surface wind; the gust slot below is given more room.
+    "wind_speed_10m": (0.0, 120.0),
+    # A compass bearing, whole circle.
+    "wind_dir_10m": (0.0, 360.0),
+    "10fg": (0.0, 150.0),
+    # A fraction expressed as a percentage, already scaled by the source plugin.
+    "tcc": (0.0, 100.0),
+    # Accumulated from the start of the run, so the ceiling is a run's total
+    # rather than a timestep's.
+    "tp": (0.0, 2000.0),
+}
+
 
 @dataclass(frozen=True)
 class Slot:
@@ -310,6 +347,10 @@ class Slot:
     feeds: tuple[str, ...]
     """The Forti parameters that read it, so a surface can say what a wrong
     mapping would spoil without knowing the parameter map itself."""
+
+    plausible: tuple[float, float]
+    """The span its values plausibly occupy, in :attr:`units`. A suspicion, not
+    a rule — see :data:`PLAUSIBLE_RANGES`."""
 
 
 def _build_slots() -> tuple[Slot, ...]:
@@ -344,7 +385,19 @@ def _build_slots() -> tuple[Slot, ...]:
             f"parameter an expects_unit, or add the slot to DERIVED_INPUT_UNITS."
         )
 
-    return tuple(Slot(key=key, units=units[key], feeds=tuple(names)) for key, names in feeds.items())
+    unbounded = [key for key in feeds if key not in PLAUSIBLE_RANGES]
+    if unbounded:
+        raise RuntimeError(
+            f"Slot(s) {', '.join(sorted(unbounded))} declare no plausible range. The unit check "
+            f"does not see a variable whose unit row says degC over numbers that are kelvin, and "
+            f"the declared range is the only thing that would — so a slot without one is not "
+            f"loudly unchecked, it is quietly unsuspectable. Add it to PLAUSIBLE_RANGES."
+        )
+
+    return tuple(
+        Slot(key=key, units=units[key], feeds=tuple(names), plausible=PLAUSIBLE_RANGES[key])
+        for key, names in feeds.items()
+    )
 
 
 #: The eight variables a publication maps. Fixed, and defined here only.

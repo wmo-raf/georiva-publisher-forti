@@ -1,0 +1,217 @@
+{% load i18n %}
+{% comment %}
+    The eight slots, and the three things that can be said about one.
+
+    Every distinction on this page was drawn in `forms.py` and arrives here as a
+    row: which parameters the slot feeds, whether anything fills it, what was
+    refused about it and what is merely suspected. Nothing is decided in an
+    `{% if %}` here, because a distinction drawn in a template is one nobody
+    tests — the rule `panels/publish_history.html` already follows, and for the
+    same reason.
+
+    The warnings sit **under the chooser they are about** rather than in a list
+    at the foot of the section. A warning names a slot, and a reader who has to
+    carry the slot name down the page to find the row it belongs to is being
+    asked to do the join the form is for.
+
+    What the form did not check is stated last and in full. It is the part most
+    easily lost to a redesign that reads it as boilerplate, so it is prose in a
+    bordered block rather than a muted footnote: an operator who reads a saved
+    mapping as a verified one has been misled by this page, and no amount of
+    correct checking above makes that better.
+
+    The style block is here rather than in `{% block extra_css %}` because a
+    panel is a fragment inside somebody else's form and has no blocks to fill;
+    the classes are prefixed `fm-` for the same reason `fh-` is on the history
+    panel and `fv-` on the verification one.
+{% endcomment %}
+<style>
+    .fm-lead {
+        color: var(--w-color-grey-400);
+        margin: 0 0 1em;
+        max-width: 48em;
+    }
+
+    .fm-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .fm-table th,
+    .fm-table td {
+        text-align: left;
+        padding: 0.7em 0.8em 0.7em 0;
+        border-bottom: 1px solid var(--w-color-border-furniture);
+        vertical-align: top;
+    }
+
+    .fm-table thead th {
+        font-size: 0.75em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--w-color-grey-400);
+        white-space: nowrap;
+    }
+
+    .fm-slot {
+        white-space: nowrap;
+        font-weight: 600;
+    }
+
+    .fm-units {
+        display: block;
+        font-weight: 400;
+        font-size: 0.85em;
+        color: var(--w-color-grey-400);
+    }
+
+    .fm-feeds {
+        font-size: 0.85em;
+        color: var(--w-color-grey-400);
+        max-width: 22em;
+    }
+
+    .fm-choice select {
+        width: 100%;
+        max-width: 24em;
+    }
+
+    .fm-incomplete {
+        display: inline-block;
+        margin-top: 0.4em;
+        font-size: 0.85em;
+        color: var(--w-color-grey-400);
+    }
+
+    .fm-error {
+        margin: 0.5em 0 0;
+        font-size: 0.85em;
+        color: var(--w-color-critical-200);
+    }
+
+    /**
+     * A tinted note rather than amber text, which is how `verification_panel.html`
+     * already renders a warning and the reason it does: `--w-color-warning-100` is
+     * a background colour, and set as a foreground it reads at about 2:1 against
+     * the admin's own surface. The words carry the warning; the tint only finds it.
+     */
+    .fm-concern {
+        margin: 0.5em 0 0;
+        padding: 0.5em 0.7em;
+        font-size: 0.85em;
+        background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
+        border-left: 3px solid color-mix(in srgb, var(--w-color-warning-100) 55%, transparent);
+        border-radius: 0 3px 3px 0;
+        max-width: 40em;
+    }
+
+    .fm-ack {
+        margin: 1.2em 0 0;
+        padding: 0.9em 1em;
+        background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
+        border: 1px solid color-mix(in srgb, var(--w-color-warning-100) 45%, transparent);
+        border-radius: 3px;
+        max-width: 48em;
+    }
+
+    .fm-ack label {
+        font-weight: 600;
+    }
+
+    .fm-checks {
+        margin: 1.6em 0 0;
+        padding: 1em 1.2em;
+        border: 1px solid var(--w-color-border-furniture);
+        border-radius: 3px;
+        max-width: 48em;
+    }
+
+    .fm-checks-heading {
+        margin: 0 0 0.4em;
+        font-size: 0.8em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--w-color-grey-400);
+    }
+
+    .fm-checks ul {
+        margin: 0 0 1.2em;
+        padding-left: 1.2em;
+    }
+
+    .fm-checks ul:last-child {
+        margin-bottom: 0;
+    }
+
+    .fm-checks li {
+        margin-bottom: 0.5em;
+    }
+</style>
+
+<p class="fm-lead">
+    {% blocktrans trimmed %}
+        Which variable of this collection fills each role the parameter map reads. The eight are
+        fixed by the format and pre-filled by slug where the collection already uses the expected
+        name, so this is an override rather than a set of decisions. A slot left blank saves, and
+        the publish is refused by slot name until something fills it.
+    {% endblocktrans %}
+</p>
+
+<table class="fm-table">
+    <thead>
+        <tr>
+            <th scope="col">{% trans "Slot" %}</th>
+            <th scope="col">{% trans "Published as" %}</th>
+            <th scope="col">{% trans "Variable" %}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+            <tr>
+                {% comment %}
+                    A row header carrying the chooser's label, so the select is
+                    named by its slot rather than by whatever a screen reader can
+                    infer from the cell beside it. The "Published as" cell is the
+                    field's own help text under the id `aria-describedby` points
+                    at — the same sentence, once.
+                {% endcomment %}
+                <th scope="row" class="fm-slot">
+                    <label for="{{ row.field.id_for_label }}"><code>{{ row.slot.key }}</code></label>
+                    <span class="fm-units">{{ row.slot.units }}</span>
+                </th>
+                <td class="fm-feeds" id="{{ row.field.auto_id }}_helptext">{{ row.field.help_text }}</td>
+                <td class="fm-choice">
+                    {{ row.field }}
+                    {% if row.incomplete %}<span class="fm-incomplete">{{ incomplete_label }}</span>{% endif %}
+                    {% for error in row.field.errors %}<p class="fm-error">{{ error }}</p>{% endfor %}
+                    {% for concern in row.concerns %}<p class="fm-concern">{{ concern.message }}</p>{% endfor %}
+                </td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% comment %}
+    Rendered only when something was raised — `forms.acknowledgement` returns
+    nothing otherwise. A tick-box present at every save is one that gets ticked
+    without being read, and the whole value of this one is that it is rare.
+{% endcomment %}
+{% if acknowledgement %}
+    <div class="fm-ack">
+        <label for="{{ acknowledgement.id_for_label }}">
+            {{ acknowledgement }} {{ acknowledgement.label }}
+        </label>
+        {% for error in acknowledgement.errors %}<p class="fm-error">{{ error }}</p>{% endfor %}
+    </div>
+{% endif %}
+
+<div class="fm-checks">
+    <p class="fm-checks-heading">{% trans "What this form checked" %}</p>
+    <ul>
+        {% for sentence in checks_made %}<li>{{ sentence }}</li>{% endfor %}
+    </ul>
+    <p class="fm-checks-heading">{% trans "What it did not check" %}</p>
+    <ul>
+        {% for sentence in checks_not_made %}<li>{{ sentence }}</li>{% endfor %}
+    </ul>
+</div>
