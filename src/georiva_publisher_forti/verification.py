@@ -407,7 +407,11 @@ class ResidentAreas:
     #: that would have told it.
     presence: str
     #: ``area key → (available, loaded)``, in the order the reader lists them.
-    reported: dict = field(default_factory=dict)
+    #: Not ``reported``: :attr:`Module.reported` and :attr:`Chain.reported` in
+    #: this same module are booleans meaning "the reader said anything at all",
+    #: and one word for both a yes/no and a mapping is a word that reads wrong
+    #: at whichever of the three sites you meet second.
+    by_area: dict = field(default_factory=dict)
     store_error: str = ""
     detail: str = ""
 
@@ -425,7 +429,7 @@ class ResidentAreas:
         if self.presence != PRESENT:
             return Residency(area, published, presence=self.presence, detail=self.detail)
 
-        entry = self.reported.get(area)
+        entry = self.by_area.get(area)
         if entry is None:
             if published is None:
                 return Residency(
@@ -1152,11 +1156,11 @@ def resident_areas(*, sink=None, deadline: float | None = None) -> ResidentAreas
         return ResidentAreas(reading.presence, detail=reading.detail)
 
     state = reading.payload.get("state")
-    reported = _reported_areas(state)
-    if reported is None:
+    by_area = _reported_areas(state)
+    if by_area is None:
         return ResidentAreas(UNREPORTED, detail=NO_AREA_STATE)
 
-    return ResidentAreas(PRESENT, reported=reported, store_error=str(state.get("store_error") or ""))
+    return ResidentAreas(PRESENT, by_area=by_area, store_error=str(state.get("store_error") or ""))
 
 
 def report(*, sink=None, deadline: float | None = None) -> Report:
