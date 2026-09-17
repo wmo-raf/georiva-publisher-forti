@@ -484,8 +484,14 @@ Two things it says that the columns do not:
 It reads the database and nothing else — no status document, no bucket. Every
 other Forti surface reads the serving plane, and an edit form behind object
 storage's deadline is one that cannot be used to correct a bbox while the bucket
-is slow. Retention keeps thirty days of rows; the panel shows the most recent 50
-and says how many there are.
+is slow.
+
+What bounds the table is **retention**: the daily pass deletes rows older than
+thirty days, and thirty days of the busiest plausible cadence is under two
+hundred. The 250-row ceiling above that is a guard on the deployment where that
+pass is *not* running — rows then accumulate until somebody notices, and the page
+they would notice on must not be the one that stops loading. When it bites, the
+table says how many rows it is not showing.
 
 ## Tests
 

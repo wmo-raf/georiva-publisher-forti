@@ -158,6 +158,26 @@ class FailedAttemptTests(HistoryTestCase):
         self.assertNotIn("points", figures)
         self.assertNotIn("objects written", figures)
 
+    def test_a_failure_whose_exception_said_nothing_still_says_something(self):
+        """``build_attempt`` stores ``str(exc)`` whatever it is, and ``str()`` of
+        a bare ``ValueError()`` is the empty string. With no figures either — a
+        failure this early has established none — the row would otherwise render
+        as blank space where the error belongs, which is the one row on the page
+        that must never be silent."""
+        self.record(outcome=FAILURE, error="")
+
+        entry = self.only()
+
+        self.assertEqual(entry.badge, history.FAILED)
+        self.assertEqual(entry.error, history.NO_MESSAGE)
+
+    def test_a_success_is_not_given_a_message_it_never_had(self):
+        """The fallback is a failure's, and a success with an empty error field
+        is every success there has ever been."""
+        self.record(**PUBLISHED)
+
+        self.assertEqual(self.only().error, "")
+
     def test_an_attempt_that_established_nothing_has_no_figures_at_all(self):
         """A publication with no closed run never reaches the plan, so there is
         genuinely nothing to say about it but the error."""
@@ -175,8 +195,8 @@ class RetentionPassTests(HistoryTestCase):
 
         entry = self.only()
 
-        self.assertTrue(entry.is_retention)
         self.assertEqual(entry.kind_label, history.RETENTION_LABEL)
+        self.assertNotEqual(entry.kind_label, history.PUBLISH_LABEL)
         self.assertEqual(entry.badge, history.PRUNED)
 
     def test_it_is_described_in_its_own_terms_and_not_a_publish_s(self):
@@ -193,7 +213,7 @@ class RetentionPassTests(HistoryTestCase):
 
         entry = self.only()
 
-        self.assertTrue(entry.is_retention)
+        self.assertEqual(entry.kind_label, history.RETENTION_LABEL)
         self.assertEqual(entry.badge, history.FAILED)
         self.assertEqual(entry.error, "ClientError: An error occurred (AccessDenied)")
 
@@ -246,13 +266,23 @@ class LengthTests(HistoryTestCase):
     """
 
     def test_a_long_history_shows_the_recent_ones_and_counts_the_rest(self):
-        for minutes in range(history.SHOWN + 5):
-            self.record(ago=minutes, **PUBLISHED)
+        now = timezone.now()
+        FortiPublicationBuildLog.objects.bulk_create(
+            FortiPublicationBuildLog(
+                publication=self.publication,
+                kind=BUILD,
+                outcome=SUCCESS,
+                started_at=now - timedelta(minutes=minutes),
+                finished_at=now - timedelta(minutes=minutes) + timedelta(seconds=30),
+                **PUBLISHED,
+            )
+            for minutes in range(history.SHOWN_ROWS + 5)
+        )
 
         report = history.report(self.publication)
 
-        self.assertEqual(len(report.entries), history.SHOWN)
-        self.assertEqual(report.total, history.SHOWN + 5)
+        self.assertEqual(len(report.entries), history.SHOWN_ROWS)
+        self.assertEqual(report.total, history.SHOWN_ROWS + 5)
         self.assertTrue(report.truncated)
 
     def test_a_history_that_fits_does_not_claim_to_be_cut_short(self):
@@ -285,3 +315,13 @@ class DurationTests(HistoryTestCase):
         row.save(update_fields=["finished_at"])
 
         self.assertEqual(self.only().duration, "4 min 30 s")
+
+    def test_a_publish_of_hours_drops_the_seconds_rather_than_counting_to_7200(self):
+        """Reachable: a build holds its lock for as long as it needs, and a
+        wide area over a slow bucket has taken this long. Seconds stop meaning
+        anything at this scale and "134 min" is a figure nobody reads."""
+        row = self.record(**PUBLISHED)
+        row.finished_at = row.started_at + timedelta(hours=2, minutes=14, seconds=9)
+        row.save(update_fields=["finished_at"])
+
+        self.assertEqual(self.only().duration, "2 h 14 min")

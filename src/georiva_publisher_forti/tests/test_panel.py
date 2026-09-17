@@ -438,6 +438,18 @@ class PublicationHistoryTests(TestCase):
 
         self.assertContains(response, "GridMoved: 1920 points, pinned at 480")
 
+    def test_a_failure_that_established_nothing_is_not_a_blank_row(self):
+        """The template's one decision: what goes in the cell when there are no
+        figures. A failure this early has none, and `str()` of a bare exception
+        can be empty — so without the fallback this row is blank space where the
+        error belongs."""
+        self.record(outcome=FortiPublicationBuildLog.Outcome.FAILURE, error="")
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Failed without a message")
+
     def test_a_retention_pass_is_distinguishable_from_a_publish(self):
         """They share a table and almost no figures, so the word that tells them
         apart has to be on the row."""

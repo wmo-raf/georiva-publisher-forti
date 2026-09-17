@@ -36,11 +36,16 @@ looking for a fault that is not there.
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-#: How many rows the page shows. Retention keeps thirty days and a six-run day
-#: fills nearly two hundred of them, each able to carry a traceback's first
-#: line — so the page shows the recent ones and says how many there are. An
-#: operator chasing further back than this is reading logs, not an admin page.
-SHOWN = 50
+#: A ceiling, not an editorial decision. What bounds this page in normal
+#: operation is retention: rows older than thirty days are deleted by the daily
+#: pass, and thirty days of the busiest plausible cadence — four runs a day and
+#: a retention pass — is under two hundred rows. So this sits above that, and
+#: what it actually guards is the deployment where the daily task is *not*
+#: running: rows then accumulate for as long as nobody notices, and the page an
+#: operator would use to notice must not be the one that stops loading. When it
+#: does bite, the page says how many rows it is not showing rather than ending
+#: without explanation.
+SHOWN_ROWS = 250
 
 #: The badge a row gets, which is the state rather than the outcome column: two
 #: of these are ``success``, and telling them apart is half of why this module
@@ -59,6 +64,26 @@ BADGE_LABELS = {
     PRUNED: "pruned",
     FAILED: "failed",
 }
+
+#: The colour each badge is emphasised in, in Wagtail's own utility classes and
+#: beside its own ``w-status`` pill — which is how :class:`~.wagtail_hooks.ResidencyColumn`
+#: already colours six words, and the reason it does: a plugin has no business
+#: adding admin CSS for what the admin already has. The word carries the state
+#: and the colour only emphasises it, so a badge with no rule here renders in the
+#: table's ordinary text rather than in somebody else's colour.
+BADGE_CLASSES = {
+    PUBLISHED: "w-text-positive-100",
+    PRUNED: "w-text-positive-100",
+    UNCHANGED: "w-text-grey-400",
+    FAILED: "w-text-critical-200",
+}
+
+#: What a failure says when the exception did not. ``build_attempt`` stores
+#: ``str(exc)`` whatever it is, and ``str()`` of a bare ``ValueError()`` is the
+#: empty string — so without this a failed attempt that established no figures
+#: renders as an empty row, which is the one row on the page that must never be
+#: silent.
+NO_MESSAGE = "Failed without a message. The worker's log for this run has the traceback."
 
 PUBLISH_LABEL = "Publish"
 RETENTION_LABEL = "Retention"
@@ -87,15 +112,11 @@ class Figure:
 
     @property
     def text(self) -> str:
-        """The figure as the page prints it, and never localised.
-
-        The version is an identifier that happens to be spelled in digits — it
-        is compared by eye against the listing's published version and pasted
-        into a bucket path, so ``USE_THOUSAND_SEPARATOR`` turning it into
-        ``178,835,040,000`` would make the page disagree with the bucket. The
-        counts beside it are small enough that a separator would never appear,
-        so one rule covers every figure rather than two covering one each.
-        """
+        """The figure as the page prints it, unlocalised for the reason
+        :attr:`~.verification.Residency.figure` gives: a version is an
+        identifier that happens to be spelled in digits. The counts beside it
+        are too small for a separator to ever appear, so one rule covers every
+        figure rather than two covering one each."""
         return str(self.value)
 
 
@@ -104,7 +125,6 @@ class Entry:
     """One publish attempt, or one retention pass."""
 
     kind_label: str
-    is_retention: bool
     badge: str
     started_at: datetime
     duration: str
@@ -116,8 +136,8 @@ class Entry:
         return BADGE_LABELS.get(self.badge, self.badge)
 
     @property
-    def failed(self) -> bool:
-        return self.badge == FAILED
+    def badge_class(self) -> str:
+        return BADGE_CLASSES.get(self.badge, "")
 
 
 @dataclass(frozen=True)
@@ -144,9 +164,9 @@ def report(publication) -> History:
     rather than ``len()`` of an unsliced queryset, because "how much am I not
     seeing" must not cost the fetching of what is not being seen.
     """
-    rows = publication.build_logs.all()[:SHOWN]
+    rows = publication.build_logs.all()[:SHOWN_ROWS]
     entries = tuple(_entry(row) for row in rows)
-    total = publication.build_logs.count() if len(entries) == SHOWN else len(entries)
+    total = publication.build_logs.count() if len(entries) == SHOWN_ROWS else len(entries)
     return History(entries=entries, total=total)
 
 
@@ -154,13 +174,19 @@ def _entry(row) -> Entry:
     is_retention = row.kind == row.Kind.GC
     return Entry(
         kind_label=RETENTION_LABEL if is_retention else PUBLISH_LABEL,
-        is_retention=is_retention,
         badge=_badge(row, is_retention),
         started_at=row.started_at,
         duration=_duration(row.duration),
         figures=_figures(row),
-        error=row.error,
+        error=_error(row),
     )
+
+
+def _error(row) -> str:
+    """What a failed row says, which is never nothing. See :data:`NO_MESSAGE`."""
+    if row.outcome != row.Outcome.FAILURE:
+        return row.error
+    return row.error or NO_MESSAGE
 
 
 def _badge(row, is_retention: bool) -> str:
@@ -170,6 +196,17 @@ def _badge(row, is_retention: bool) -> str:
     ``prune_forti_publications`` writes a success row only when something went —
     so every successful pass has a figure, and ``pruned`` needs no counterpart
     to ``unchanged``.
+
+    ``unchanged`` is **inferred**, and the invariant it rests on is one line of
+    somebody else's function: ``publisher.publish`` sets
+    ``facts["objects_written"]`` only after ``stage_version`` has returned, and
+    returns before that whenever the fingerprint has not moved. So a success
+    holding no objects is a publish that found itself up to date, and there is
+    no other path to one. A future success path that wrote nothing would read as
+    "nothing to do" here without saying so anywhere — which is why the coupling
+    is named rather than left to be rediscovered. Recording the skip explicitly
+    would settle it, and is a change to what is recorded rather than to what is
+    rendered.
     """
     if row.outcome == row.Outcome.FAILURE:
         return FAILED
@@ -195,8 +232,6 @@ def _duration(elapsed: timedelta) -> str:
     coarse on purpose. Microseconds would hide that inside their own noise.
     """
     seconds = int(elapsed.total_seconds())
-    if seconds < 0:
-        return ""
     if seconds < 60:
         return f"{seconds} s"
     minutes, seconds = divmod(seconds, 60)
