@@ -508,6 +508,24 @@ class ResidencyTests(PanelTestCase):
         self.assertEqual(residency.badge, "differs")
         self.assertEqual(residency.loaded, PUBLISHED)
 
+    def test_a_resident_area_ahead_of_the_published_version_also_differs(self):
+        """The other direction, which used to render "agrees" in green.
+
+        Every other disagreement here is the reader lagging. This is the reader
+        *ahead* — a database restored past a publish, or a second instance
+        writing the same area — and it fell through to the agreement branch,
+        which called the resident figure "the version GeoRiva published" beside
+        a published column showing a different number.
+        """
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": LATER, "loaded": LATER}])
+
+        residency = self.residency()
+
+        self.assertEqual(residency.badge, "differs")
+        self.assertEqual(residency.loaded, LATER)
+        self.assertEqual(residency.published, PUBLISHED)
+        self.assertIn("ahead of", residency.detail)
+
     def test_a_published_area_the_reader_does_not_list_is_a_disagreement(self):
         """Not an absence. GeoRiva says it published; the process serving it has
         never been told the area exists."""

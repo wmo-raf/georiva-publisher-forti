@@ -174,13 +174,26 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         self.client.force_login(user or make_org_admin("org-admin"))
 
     def test_the_resident_version_is_shown_beside_the_published_one(self):
+        """Asserted on the resident cell's own markup, not on the digits.
+
+        When the two agree they are the same digits, so asserting the number is
+        merely *present* is an assertion the ``published_version`` column
+        satisfies on its own: the test passed while proving only that a column
+        the page already had still rendered. Counting occurrences does not fix
+        it either — the version is in the cell's ``title`` sentences as well, so
+        the count tracks the tooltip wording rather than the figure.
+
+        The figure is the one place the version renders as a span's whole text
+        (``residency_cell.html``); the published column renders it bare in its
+        ``<td>``. That is what makes this an assertion about *this* cell.
+        """
         write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
         self.sign_in()
 
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, str(PUBLISHED))
+        self.assertContains(response, f">{PUBLISHED}</span>", count=1)
         self.assertContains(response, "agrees")
 
     def test_a_resident_version_behind_the_published_one_is_told_apart_from_agreement(self):
@@ -193,6 +206,11 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         self.assertContains(response, "differs")
         self.assertNotContains(response, "agrees")
+        # The two figures differ here, so each can be asserted on its own: the
+        # resident version renders in the cell, and the published one it
+        # disagrees with is still in the row beside it.
+        self.assertContains(response, f">{BEHIND}</span>")
+        self.assertContains(response, str(PUBLISHED))
 
     def test_an_organisation_administrator_sees_it_for_their_own_publications(self):
         """No superuser anywhere in this test. The audience is the operator who

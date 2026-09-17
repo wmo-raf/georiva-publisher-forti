@@ -1004,6 +1004,20 @@ def _area_verdict(
         )
     if published is None:
         return (f"Serving {loaded}, for an area no publication on this instance names.", False)
+    if loaded > published:
+        # Resident *ahead* of the database. Everything above this line is the
+        # reader lagging, which is the ordinary direction; this is the other
+        # one, and it used to fall through to the agreement branch below and
+        # render "agrees" in green over two visibly different numbers, under a
+        # sentence calling `loaded` "the version GeoRiva published" when it is
+        # precisely not. Whatever produced it — a database restored past a
+        # publish, a second instance writing this area — the two facts disagree
+        # and the column exists to say when they do.
+        return (
+            f"Serving {loaded}, which is ahead of the {published} GeoRiva has published — "
+            f"the database has been rolled back, or something else is publishing this area.",
+            False,
+        )
     return (f"Serving {loaded}, the version GeoRiva published.", True)
 
 
