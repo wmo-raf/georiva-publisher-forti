@@ -46,6 +46,12 @@ this page's audience to the documents it cannot narrow. An area row is one key,
 one version and one organisation; a configuration sha describes one document
 governing every tenant and narrows to nobody. That difference is the whole of
 why one of these is an organisation's and the other is not.
+
+The last surface is :class:`PublishHistoryPanel`, and it is the only one that
+asks nothing of the serving plane: what a publication has *attempted* is a
+question the database answers on its own. It therefore sits where an operator
+already is when they ask it — on the publication's own page — and inherits that
+page's narrowing rather than declaring a second one.
 """
 
 import logging
@@ -59,14 +65,14 @@ from django.utils.translation import gettext_lazy as _
 from wagtail import hooks
 from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
-from wagtail.admin.panels import FieldPanel, MultiFieldPanel
+from wagtail.admin.panels import FieldPanel, MultiFieldPanel, Panel
 from wagtail.admin.ui.tables import Column
 from wagtail.snippets.models import register_snippet
 from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, SnippetViewSet
 
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
-from . import verification
+from . import history, verification
 from .models import FortiPublication
 
 logger = logging.getLogger(__name__)
@@ -156,6 +162,46 @@ class ResidencyColumn(Column):
 
     def get_value(self, instance):
         return self.resident.of(instance)
+
+
+class PublishHistoryPanel(Panel):
+    """Every attempt this publication has made, on the publication's own page.
+
+    The rows have been recorded since the plugin's first publish and nothing has
+    ever rendered one. The publication holds only the *latest* state — a failed
+    build overwrites the previous error in place — so an operator could see that
+    the last publish failed and could not tell a first failure from a week of
+    them.
+
+    **A panel on the edit page, not a page of its own.** The edit page is where
+    an operator already is when they ask what a publication has been doing, and
+    it is already narrowed to their organisation: ``OrgScopedViewSetMixin``
+    scopes every single-object view, so a foreign pk is a 404 before this panel
+    is built. A separate route would be a second place that narrowing has to be
+    remembered, which is the arrangement in which one of the two is later
+    forgotten.
+
+    **It reads the database and nothing else.** Every other Forti surface reads
+    the serving plane, and putting object storage's deadline behind an edit form
+    would mean a bbox could not be corrected while the bucket was slow. The
+    question this panel answers — what has this publication done — is answerable
+    without asking any remote process, so it asks none.
+    """
+
+    class BoundPanel(Panel.BoundPanel):
+        template_name = "georiva_publisher_forti/panels/publish_history.html"
+
+        def is_shown(self):
+            """Hidden on the add form, where there is no publication to have a
+            history: a reverse relation on an unsaved instance raises rather
+            than coming back empty, and an empty history section above a form
+            that has never been saved would answer a question nobody asked."""
+            return bool(self.instance and self.instance.pk)
+
+        def get_context_data(self, parent_context=None):
+            context = super().get_context_data(parent_context)
+            context["history"] = history.report(self.instance)
+            return context
 
 
 class FortiPublicationIndexView(IndexView):
@@ -250,6 +296,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
         ),
         FieldPanel("status", read_only=True),
         FieldPanel("error", read_only=True),
+        PublishHistoryPanel(heading="History", icon="history"),
     ]
 
 

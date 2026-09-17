@@ -461,6 +461,38 @@ The status document lists every area at once, so the whole listing is served by
 **one** read rather than one per row: a read per row would put object storage's
 deadline on the page instead of on the read.
 
+### History, on a publication's own page
+
+**Snippets → Forti publications → *one model*** ends with a **History** panel:
+every publish attempt and every retention pass, newest first, with what it did
+and — for a failure — the error beside the attempt rather than in a log search.
+The rows have always been recorded; until now nothing rendered one, and the
+publication itself holds only the *latest* state, a failed build overwriting the
+previous error in place. So the panel is what tells a first failure from a week
+of them, and what shows a run getting smaller before somebody complains.
+
+Two things it says that the columns do not:
+
+- **an absent figure is one the attempt never reached**, not a count of zero. No
+  publish this plugin can complete writes zero objects or transposes zero
+  points, so a zero at the database means the attempt died before counting —
+  and printing it would describe a run that collapsed to nothing;
+- **"nothing to do" is not "wrote nothing"**. A publish that finds its
+  fingerprint unmoved returns before writing, which is the ordinary outcome of
+  the re-queue button on a current publication.
+
+It reads the database and nothing else — no status document, no bucket. Every
+other Forti surface reads the serving plane, and an edit form behind object
+storage's deadline is one that cannot be used to correct a bbox while the bucket
+is slow.
+
+What bounds the table is **retention**: the daily pass deletes rows older than
+thirty days, and thirty days of the busiest plausible cadence is under two
+hundred. The 250-row ceiling above that is a guard on the deployment where that
+pass is *not* running — rows then accumulate until somebody notices, and the page
+they would notice on must not be the one that stops loading. When it bites, the
+table says how many rows it is not showing.
+
 ## Tests
 
 ```bash

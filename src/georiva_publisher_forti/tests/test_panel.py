@@ -1,4 +1,4 @@
-"""The two surfaces that read the serving plane, and who may read each.
+"""The admin's Forti surfaces, and who may read each.
 
 One document, two audiences, and the difference between them is the subject of
 this module. The **panel** renders every figure the instance has:
@@ -19,6 +19,14 @@ and the distinctions a one-cell rendering could most easily flatten.
 They live together because they are one decision seen from both sides. Split
 apart, the listing's tests would read as a listing feature rather than as the
 repair the panel's access rule made necessary.
+
+The **detail page** is the third surface and the narrowest: one publication's own
+history, drawn from rows that carry its foreign key and nothing else. It reads
+the serving plane not at all, which is a property worth asserting rather than
+assuming — the two surfaces above both do, and a panel added to this page would
+put object storage's deadline on every edit of every publication. What is
+asserted here is the rendering and the audience; the distinctions the rendering
+depends on are :mod:`~.tests.test_history`'s, on the data.
 """
 
 import time
@@ -26,9 +34,10 @@ from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from georiva.organisations.testing import dial_org
-from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.models import FortiPublication, FortiPublicationBuildLog, instance_sink
 
 from .factories import make_collection, make_org_admin, make_publication, make_user
 from .sink_isolation import TemporarySinkMixin
@@ -370,3 +379,143 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
 
         self.assertContains(self.client.get(self.url), "agrees")
+
+
+class PublicationHistoryTests(TestCase):
+    """The history on one publication's own page, for the operator who owns it.
+
+    No sink mixin and no status document anywhere in this class: the page reads
+    the database and nothing else, and one of the tests below is what keeps it
+    that way. An edit form that made a remote read would hold a worker on
+    object storage's deadline every time somebody opened a publication to change
+    its extent.
+    """
+
+    def setUp(self):
+        dial_org(self.client)
+        self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
+        self.url = reverse(
+            "wagtailsnippets_georiva_publisher_forti_fortipublication:edit",
+            args=[self.publication.pk],
+        )
+
+    def record(self, kind=None, outcome=None, publication=None, **fields):
+        log = FortiPublicationBuildLog
+        return log.record(
+            publication or self.publication,
+            kind or log.Kind.BUILD,
+            outcome or log.Outcome.SUCCESS,
+            timezone.now(),
+            **fields,
+        )
+
+    def sign_in(self, user=None):
+        self.client.force_login(user or make_org_admin("org-admin"))
+
+    def test_an_organisation_administrator_sees_what_a_publish_did(self):
+        """The figures, in the terms they were recorded in. No superuser here:
+        the audience is the operator who runs the model, and the instance-wide
+        panel turns them away."""
+        self.record(version=PUBLISHED, step_count=15, point_count=1920, parameter_count=15, objects_written=4)
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, str(PUBLISHED))
+        self.assertContains(response, "objects written")
+        self.assertContains(response, "1920")
+
+    def test_a_failed_attempt_shows_its_error_beside_the_attempt(self):
+        """The whole of the feature's point for the operator having a bad day:
+        the publication itself holds only the latest error, overwritten in
+        place, so without this the third failure of the week is indistinguishable
+        from the first."""
+        self.record(outcome=FortiPublicationBuildLog.Outcome.FAILURE, error="GridMoved: 1920 points, pinned at 480")
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "GridMoved: 1920 points, pinned at 480")
+
+    def test_a_failure_that_established_nothing_is_not_a_blank_row(self):
+        """The template's one decision: what goes in the cell when there are no
+        figures. A failure this early has none, and `str()` of a bare exception
+        can be empty — so without the fallback this row is blank space where the
+        error belongs."""
+        self.record(outcome=FortiPublicationBuildLog.Outcome.FAILURE, error="")
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Failed without a message")
+
+    def test_a_retention_pass_is_distinguishable_from_a_publish(self):
+        """They share a table and almost no figures, so the word that tells them
+        apart has to be on the row."""
+        self.record(kind=FortiPublicationBuildLog.Kind.GC, versions_pruned=3)
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Retention")
+        self.assertContains(response, "versions pruned")
+
+    def test_a_publication_with_no_history_says_why_rather_than_rendering_nothing(self):
+        """The state every publication is in until its first sweep, and
+        therefore the first state this page is ever seen in. An empty region
+        under a heading reads as a page that failed to load."""
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Nothing has been published or pruned yet")
+
+    def test_another_organisations_history_is_not_reachable(self):
+        """The narrowing is the snippet view's, which scopes every single-object
+        view to the active organisation — so this asserts that the page carrying
+        a history obeys it, not that the history filters on its own."""
+        theirs = make_publication(make_collection(slug="gfs-surface", org_slug="other-org"), slug="gfs")
+        self.record(
+            publication=theirs,
+            outcome=FortiPublicationBuildLog.Outcome.FAILURE,
+            error="not this organisation's failure",
+        )
+        self.sign_in()
+
+        response = self.client.get(
+            reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:edit", args=[theirs.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotContains(response, "not this organisation's failure", status_code=404)
+
+    def test_the_form_for_a_publication_that_does_not_exist_yet_has_no_history(self):
+        """There is no publication to have one, and a reverse relation on an
+        unsaved instance is an exception rather than an empty list."""
+        self.sign_in()
+
+        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Nothing has been published or pruned yet")
+
+    def test_rendering_a_publication_does_not_touch_object_storage(self):
+        """Every other Forti surface reads the serving plane; this one must not.
+        An edit form behind a storage deadline is a form that hangs for minutes
+        when the bucket does, for an operator who only wanted to change a bbox.
+        """
+        self.record(version=PUBLISHED, step_count=15, point_count=1920, parameter_count=15, objects_written=4)
+        self.sign_in()
+        sink = instance_sink()
+
+        with (
+            patch.object(type(sink), "exists", wraps=sink.exists) as exists,
+            patch.object(type(sink), "read_json", wraps=sink.read_json) as read_json,
+        ):
+            response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(exists.call_count, 0)
+        self.assertEqual(read_json.call_count, 0)

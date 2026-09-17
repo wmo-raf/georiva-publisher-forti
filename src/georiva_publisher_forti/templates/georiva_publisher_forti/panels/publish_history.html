@@ -1,0 +1,172 @@
+{% load i18n %}
+{% comment %}
+    One publication's attempts, in the order an operator asks about them.
+
+    Every distinction on this page was drawn in `history.py` and arrives here as
+    a word: which kind of pass a row is, which of the four states it reached, and
+    which figures it actually established. Nothing is decided in a `{% if %}`
+    here, because a distinction drawn in a template is one nobody tests.
+
+    The figures are inline rather than a column each. Six columns of mostly
+    blanks — a retention pass fills one of them, a failed attempt as few as
+    none — reads as a table of missing data, where what is true is that each
+    kind of row has its own small vocabulary. Labelled pairs say that plainly and
+    survive the narrow column a panel is rendered in.
+
+    The badge is Wagtail's own `w-status` pill, coloured by one of its own
+    utility classes — the answer `tables/residency_cell.html` already reached,
+    and for its reason: a plugin has no business shipping admin CSS for what the
+    admin already has. What is left below is the table and the figure pairs,
+    which have no utility equivalent. The style block is here rather than in
+    `{% block extra_css %}` because a panel is a fragment inside somebody else's
+    form and has no blocks to fill; the classes are prefixed for the same reason
+    `fv-` is on the verification panel.
+{% endcomment %}
+<style>
+    .fh-lead {
+        color: var(--w-color-grey-400);
+        margin: 0 0 1em;
+        max-width: 48em;
+    }
+
+    .fh-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .fh-table th,
+    .fh-table td {
+        text-align: left;
+        padding: 0.55em 0.8em 0.55em 0;
+        border-bottom: 1px solid var(--w-color-border-furniture);
+        vertical-align: top;
+    }
+
+    .fh-table th {
+        font-size: 0.75em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--w-color-grey-400);
+        white-space: nowrap;
+    }
+
+    .fh-when {
+        white-space: nowrap;
+    }
+
+    .fh-took {
+        display: block;
+        color: var(--w-color-grey-400);
+        font-size: 0.85em;
+    }
+
+    .fh-kind {
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    .fh-figures {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.2em 1.1em;
+    }
+
+    .fh-figure-label {
+        color: var(--w-color-grey-400);
+        font-size: 0.85em;
+    }
+
+    .fh-error {
+        display: block;
+        margin-top: 0.4em;
+        font-size: 0.85em;
+        word-break: break-word;
+        color: var(--w-color-critical-200);
+    }
+
+    .fh-nothing {
+        color: var(--w-color-grey-400);
+    }
+
+    .fh-note {
+        color: var(--w-color-grey-400);
+        font-size: 0.85em;
+        margin: 0.8em 0 0;
+    }
+</style>
+
+{% if history.entries %}
+    <p class="fh-lead">
+        {% blocktrans trimmed %}
+            What this publication has done, newest first. A publish attempt reports how far it
+            got, so a figure that is absent is one the attempt never reached rather than a count
+            of zero.
+        {% endblocktrans %}
+    </p>
+
+    <table class="fh-table">
+        <thead>
+            <tr>
+                <th scope="col">{% trans "When" %}</th>
+                <th scope="col">{% trans "Pass" %}</th>
+                <th scope="col">{% trans "Outcome" %}</th>
+                <th scope="col">{% trans "What it did" %}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in history.entries %}
+                <tr>
+                    <td class="fh-when">
+                        {{ entry.started_at|date:"j M Y H:i" }}
+                        <span class="fh-took">{{ entry.duration }}</span>
+                    </td>
+                    <td class="fh-kind">{{ entry.kind_label }}</td>
+                    <td>
+                        <span class="w-status {{ entry.badge_class }}">{{ entry.badge_label }}</span>
+                    </td>
+                    <td>
+                        {% if entry.figures %}
+                            <span class="fh-figures">
+                                {% for figure in entry.figures %}
+                                    <span><span class="fh-figure-label">{{ figure.label }}</span> {{ figure.text }}</span>
+                                {% endfor %}
+                            </span>
+                        {% elif not entry.error %}
+                            <span class="fh-nothing">&mdash;</span>
+                        {% endif %}
+                        {% comment %}
+                            Beside the attempt, not in a log somewhere: the publication itself
+                            keeps only the most recent error, overwritten in place, so this is
+                            the only surface on which the third failure of the week is
+                            distinguishable from the first.
+                        {% endcomment %}
+                        {% if entry.error %}<code class="fh-error">{{ entry.error }}</code>{% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if history.truncated %}
+        <p class="fh-note">
+            {% blocktrans trimmed with shown=history.entries|length total=history.total %}
+                The {{ shown }} most recent of {{ total }} kept. Rows older than thirty days are
+                removed by the daily retention pass — so a history this long usually means that
+                pass is not running.
+            {% endblocktrans %}
+        </p>
+    {% endif %}
+{% else %}
+    {% comment %}
+        The state every publication is in until its first sweep, and therefore
+        the first state this panel is ever seen in. A heading over an empty
+        region reads as a page that failed to load.
+    {% endcomment %}
+    <p class="fh-lead">
+        {% blocktrans trimmed %}
+            Nothing has been published or pruned yet. A publish runs when a run of the chosen
+            collection closes, and the sweep picks up anything it missed within five minutes;
+            every attempt from then on is listed here, whether it succeeded or not.
+        {% endblocktrans %}
+    </p>
+{% endif %}
