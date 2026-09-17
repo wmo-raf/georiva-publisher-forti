@@ -185,7 +185,42 @@ the mapping and the planner. Neither refusal can catch the confusion that
 matters: dew point mapped into the air-temperature slot is celsius into celsius,
 and every layer downstream agrees.
 
-Filling a slot in, until #13 gives it a form:
+### Editing it
+
+**The variable mapping** section of the publication's own page in the admin, which
+renders the eight slots and only those. It is absent from the *add* form, where no
+collection has been chosen and there are therefore no variables to choose between;
+creation seeds all eight rows by auto-match, and editing happens afterwards.
+
+Three answers, not two:
+
+| | |
+|---|---|
+| A unit that disagrees with the slot | **refused**, naming the parameters that would have carried the wrong number |
+| A variable that fills two slots | **warns**; saves once acknowledged |
+| A declared range that cannot reach the slot's | **warns**; saves once acknowledged |
+| A blank slot | saves, shown as `no variable yet` |
+| Everything else | **not checked**, and the page says so |
+
+The acknowledgement is a tick-box that appears only when something was raised, and
+is not stored: what is acknowledged is *those* warnings at *that* submit.
+
+The warnings are drawn by `mapping.concerns()` and are deliberately weak. The range
+check compares the variable's declared range — which core documents as a styling
+hint — against `parameters.PLAUSIBLE_RANGES`, and fires only when the two share no
+value at all; a generous range, or core's untuned 0–1 default, says nothing. What
+it catches is a variable holding another unit's numbers under the right unit label,
+which the unit check cannot see because the unit check reads the label.
+
+**No machine check catches the confusion that matters**, and the form says so on
+the page rather than only in this file. An operator who reads a saved mapping as a
+verified one has been misled by the surface.
+
+A **filled** mapping cannot follow its publication to another collection: the rows
+name variables of the collection they were filled from, so the change is refused.
+Clear the mapping first, or make a second publication.
+
+From a shell, equivalently:
 
 ```bash
 georiva shell -c "
@@ -210,7 +245,8 @@ the exception — that build finishes under the old mapping, and the correction
 lands at the next run instead. Deleting a variable a publication maps is refused
 by the database; `variable.forti_slots` answers which publications read it.
 
-See `docs/adr/0004-the-variable-mapping-is-data.md`.
+See `docs/adr/0004-the-variable-mapping-is-data.md` and
+`docs/adr/0005-the-mapping-editor-states-what-it-did-not-check.md`.
 
 ## Derivations
 

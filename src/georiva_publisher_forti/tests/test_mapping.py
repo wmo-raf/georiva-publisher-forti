@@ -5,12 +5,15 @@ match hidden inside the planner, so a collection that named its variables
 anything else could not publish at all and the only way to find out was to
 publish and read the refusal. It is data now: one row per slot.
 
-Two things are worth testing without a database. The **vocabulary** — eight
+Three things are worth testing without a database. The **vocabulary** — eight
 slots, derived from the parameter map rather than typed out again beside it, so
-a parameter added with a new source cannot leave a slot nobody can fill. And the
+a parameter added with a new source cannot leave a slot nobody can fill. The
 **auto-match**, which is the old hard-coded rule kept as a default: a migration
 and a fresh publication both lean on it, and a test that reached it through
-migration mechanics would be testing Django rather than the rule.
+migration mechanics would be testing Django rather than the rule. And the
+**concerns**, which are the two doubts a machine can raise about a mapping that
+is nonetheless legal — and whose honesty matters more than their coverage, since
+the confusion that matters is the one neither of them can see.
 """
 
 from django.core.exceptions import ValidationError
@@ -20,7 +23,7 @@ from django.test import SimpleTestCase, TestCase
 
 from georiva.core.models import Unit
 from georiva_publisher_forti import parameters as params
-from georiva_publisher_forti.mapping import auto_match
+from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns
 from georiva_publisher_forti.models import FortiPublication, FortiVariableMapping
 
 from .factories import make_collection, make_publication
@@ -77,6 +80,15 @@ class SlotVocabularyTests(SimpleTestCase):
     def test_the_choices_offer_exactly_the_vocabulary(self):
         self.assertEqual([value for value, _ in params.SLOT_CHOICES], list(params.SLOT_KEYS))
 
+    def test_every_slot_declares_the_range_its_values_plausibly_span(self):
+        """The unit check is exact and the range check is a suspicion, so an
+        undeclared range would make one slot silently unsuspectable rather than
+        loudly wrong. It is declared for all eight or for none."""
+        self.assertTrue(all(slot.plausible for slot in params.SLOTS))
+
+    def test_a_plausible_range_runs_upwards(self):
+        self.assertTrue(all(low < high for low, high in (slot.plausible for slot in params.SLOTS)))
+
 
 class AutoMatchTests(SimpleTestCase):
     def test_a_conventionally_named_collection_fills_every_slot(self):
@@ -109,6 +121,107 @@ class AutoMatchTests(SimpleTestCase):
 
         self.assertEqual(matched["2t"].slug, "2t")
         self.assertNotIn("sea_surface_temperature", matched)
+
+
+class Declared(Named):
+    """A variable as :func:`concerns` reads one: a name and a declared range."""
+
+    def __init__(self, slug, value_min=-100.0, value_max=2000.0):
+        super().__init__(slug)
+        self.value_min = value_min
+        self.value_max = value_max
+
+
+def mapping(**filled):
+    """Every slot answered, the named ones by a variable of that slug.
+
+    Written out as a whole mapping rather than as the one row under test,
+    because both concerns are properties of the mapping rather than of a row:
+    the shared one is only visible across slots, and a helper that took a single
+    row could not express it at all.
+    """
+    return {key: Declared(key) for key in params.SLOT_KEYS} | filled
+
+
+class ConcernTests(SimpleTestCase):
+    """The two doubts that warn rather than refuse.
+
+    Both are legal mappings, and what they have in common is that a refusal
+    would be a lie: a variable may deliberately fill two slots, and a declared
+    range is a styling hint rather than a measurement. What they do *not* cover
+    is the confusion that matters — dew point in the air-temperature slot is
+    degC into degC, and nothing here or anywhere else sees it. That is why the
+    surface has to say which checks it made; these tests hold the checks to what
+    they actually are.
+    """
+
+    def test_a_conventional_mapping_raises_nothing(self):
+        self.assertEqual(concerns(mapping()), ())
+
+    def test_a_blank_slot_raises_nothing(self):
+        """A slot nobody fills is incomplete, which is a different thing from
+        suspicious, and reported elsewhere."""
+        self.assertEqual(concerns(mapping(tcc=None)), ())
+
+    def test_a_variable_filling_two_slots_warns_on_both(self):
+        """On both, because an operator reading one slot must not have to find
+        the other to learn that the pair is the problem."""
+        raised = concerns(mapping(**{"2d": Declared("2t")}))
+
+        self.assertEqual({concern.slot for concern in raised}, {"2t", "2d"})
+        self.assertTrue(all(concern.kind == SHARED for concern in raised))
+
+    def test_a_shared_warning_names_the_other_slot(self):
+        (first, second) = sorted(concerns(mapping(**{"2d": Declared("2t")})), key=lambda c: c.slot)
+
+        self.assertIn("2t", first.message)
+        self.assertIn("2d", first.message)
+        self.assertIn("2t", second.message)
+        self.assertIn("2d", second.message)
+
+    def test_a_shared_warning_names_what_both_would_publish(self):
+        """What the mapping would spoil, in the vocabulary a consumer reads —
+        not "two slots agree", which is a restatement of the setting."""
+        (concern,) = [c for c in concerns(mapping(**{"2d": Declared("2t")})) if c.slot == "2d"]
+
+        self.assertIn("dew_point_temperature_2m", concern.message)
+
+    def test_a_declared_range_that_cannot_reach_the_slot_warns(self):
+        """Kelvin numbers under a celsius label: the one thing the unit check
+        cannot see, because the unit row says what the slot expects."""
+        raised = concerns(mapping(**{"2t": Declared("2t", value_min=200.0, value_max=320.0)}))
+
+        self.assertEqual([concern.slot for concern in raised], ["2t"])
+        self.assertEqual(raised[0].kind, RANGE)
+
+    def test_a_range_warning_states_both_ranges(self):
+        (concern,) = concerns(mapping(**{"2t": Declared("2t", value_min=200.0, value_max=320.0)}))
+
+        self.assertIn("200", concern.message)
+        self.assertIn("320", concern.message)
+        self.assertIn("60", concern.message)
+
+    def test_an_untuned_range_does_not_warn(self):
+        """Core seeds 0–1 on a variable nobody has styled yet (ADR 0022), which
+        is most of them. Warning on it would make the warning worthless."""
+        self.assertEqual(concerns(mapping(**{"2t": Declared("2t", value_min=0.0, value_max=1.0)})), ())
+
+    def test_a_range_that_merely_overhangs_the_slot_does_not_warn(self):
+        """A generous styling range is ordinary. Only a range that shares no
+        value at all with the slot's is evidence of anything."""
+        self.assertEqual(concerns(mapping(**{"msl": Declared("msl", value_min=0.0, value_max=1e5)})), ())
+
+    def test_both_concerns_can_be_raised_about_one_slot(self):
+        raised = concerns(mapping(**{"2d": Declared("2t", value_min=200.0, value_max=320.0)}))
+
+        self.assertEqual({concern.kind for concern in raised}, {SHARED, RANGE})
+
+    def test_the_concerns_come_back_in_vocabulary_order(self):
+        """The order the form renders its slots in, so a warning list and the
+        rows it is about read down the page together."""
+        raised = concerns(mapping(**{"tcc": Declared("2t")}))
+
+        self.assertEqual([concern.slot for concern in raised], ["2t", "tcc"])
 
 
 class SeedingTests(TestCase):
