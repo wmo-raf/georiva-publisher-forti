@@ -179,11 +179,11 @@ no configuration at all, and editing is purely an override. A collection that
 names its variables otherwise gets blank rows to fill in rather than a refusal it
 can do nothing about.
 
-A **blank slot** saves and is reported as not ready by the Readiness section
-above the mapping; the publish is refused by slot name. A slot whose variable carries the **wrong unit** is refused at both
-the mapping and the planner. Neither refusal can catch the confusion that
-matters: dew point mapped into the air-temperature slot is celsius into celsius,
-and every layer downstream agrees.
+A **blank slot** saves and is reported by the Readiness section above the
+mapping; the publish is refused by slot name. A slot whose variable carries the
+**wrong unit** is refused at both the mapping and the planner. Neither refusal
+can catch the confusion that matters: dew point mapped into the air-temperature
+slot is celsius into celsius, and every layer downstream agrees.
 
 ### Editing it
 
@@ -243,9 +243,10 @@ is filled in by hand, as above.
 
 Changing a mapping **raises the generation and marks the publication stale**, so
 the next publish outranks the last and the sweep picks it up within five minutes
-rather than at the next run. Saving a row that did not change counts for nothing. An edit made while a build is already in flight is
-the exception — that build finishes under the old mapping, and the correction
-lands at the next run instead. Deleting a variable a publication maps is refused
+rather than at the next run. Saving a row that did not change counts for
+nothing. An edit made while a build is already in flight is the exception — that
+build finishes under the old mapping, and the correction lands at the next run
+instead. Deleting a variable a publication maps is refused
 by the database; `variable.forti_slots` answers which publications read it.
 
 See `docs/adr/0004-the-variable-mapping-is-data.md` and
@@ -253,9 +254,9 @@ See `docs/adr/0004-the-variable-mapping-is-data.md` and
 
 ## Readiness
 
-**Snippets → Forti publications → *one model*** opens with a **Readiness**
-section: what a publish would meet, read from the database before anything is
-written, and before the form is saved. Every fact in it was discoverable before
+**Snippets → Forti publications → *one model*** carries a **Readiness** section
+above the variable mapping: what a publish would meet, read from the database
+before anything is written, and before the form is saved. Every fact in it was discoverable before
 only by publishing — one refusal at a time, into a build log nothing rendered.
 
 Six findings, in the order an operator meets them:
@@ -279,8 +280,9 @@ two of them**:
 - **still ingesting** — it publishes *now*, and would publish more steps once
   the run's stragglers land. The count says `8 of 9` rather than `8`;
 - **cannot say yet** — a finding downstream of one of the above, with nothing
-  wrong of its own. The step count of a publication with a blank slot is this,
-  not a second fault;
+  wrong of its own. The step count is this whenever anything above it needs a
+  change: a publish is refused before it counts a step, so a number there would
+  promise a publish that is not going to happen;
 - **ready**.
 
 The whole section's verdict is its **worst** finding's state, derived rather than

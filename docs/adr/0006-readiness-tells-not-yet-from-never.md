@@ -4,10 +4,10 @@
 
 accepted
 
-Implements #14, under #7. Adds `readiness.py`, one panel template and
-`ReadinessPanel`; promotes two of `planner.py`'s private functions to public so
-that one implementation answers both callers. No model change and no migration —
-every figure was already in the database.
+Implements #14, under #7. Adds `readiness.py`, `prose.py`, one panel template and
+`ReadinessPanel`; makes four of `planner.py`'s rules public so that one
+implementation answers both callers. No model change and no migration — every
+figure was already in the database.
 
 Completes the chooser half of #7, whose problem statement named the fault this
 closes:
@@ -64,6 +64,14 @@ would be a false negative on a publication that is about to serve.
 with a blank slot is not a second fault — it is the same fault seen from
 downstream, and two red rows for one cause reads as two things to fix.
 
+That rule binds the step count generally, not only for a blank slot: **it answers
+nothing while any finding above it is blocked.** `plan` refuses at the
+collection, the mapping or the units before it reaches the step intersection, so
+a count rendered beside such a row would promise a publish that is not going to
+happen — and a green row beside a red one reads as the part that is fine. The
+first draft of this module counted steps beside a blocked unit; the review axes
+caught it, and `_any_blocked` is the repair.
+
 The section's verdict is the **worst** finding's state, derived rather than
 stored: a summary that could disagree with its own rows is worse than no summary.
 
@@ -82,16 +90,24 @@ rule differ, the README described the former as though it settled the matter, an
 nothing said so on any surface. This ADR does not resolve it — the refusal is
 tested and unchanged — it only stops it being invisible.
 
-### The step count is the planner's, not a second query shaped like it
+### Every rule is the planner's, reached through the planner
 
-`planner._cog_hrefs` and `planner._shared_times` became `cog_hrefs` and
-`shared_times`. Readiness calls them; `plan` calls them; there is one answer to
-"which COGs does this run have for these slots".
+`_cog_hrefs` and `_shared_times` became `cog_hrefs` and `shared_times`; the
+window rule became `spans_a_period`; the visibility refusal became the predicate
+`readable_without_credentials` and the sentence `NOT_PUBLIC`, beside
+`models.NOT_A_FORECAST`, which this module already reused. Readiness calls them;
+`plan` calls them.
 
-A second implementation would have been four lines and would have been wrong in
-the one way that matters: the form would promise a number the build then
-disagreed with, and an operator reading both would have no way to tell which had
-lied.
+A second implementation would have been a few lines each and would have been
+wrong in the one way that matters: the form would promise what the build then
+refused, and an operator reading both would have no way to tell which had lied.
+
+**Rules shared, wording per audience.** What readiness writes for itself is the
+prose a form needs — "this resolves itself", "fill the blank rows in below" —
+which an exception raised into a build log has no use for. `prose.py` holds the
+two formattings that must nonetheless agree across surfaces: how a list of slots
+is written, and how a reference time is spelled. A run spelled two ways reads as
+two runs.
 
 ### It reads the database and nothing else
 
@@ -120,6 +136,14 @@ a count of the closed ones, the mapping rows, and one `Asset` query for the step
 intersection — the last of them the planner's own, so it is the query a publish
 would make anyway. It runs on every render of every publication edit page, and
 none of it leaves the database.
+
+**Readiness is on the edit page, not the add form.** #14 asks for it "beside the
+publication form before saving", and this reads that as the form where there is
+a publication to be ready: on the add form no collection has been chosen, no
+mapping exists until creation seeds one, and every finding would read "cannot
+say". It is the reading [ADR 0005](0005-the-mapping-editor-states-what-it-did-not-check.md)
+already made for the mapping section, which is absent there for the same reason.
+An operator still meets readiness before saving anything they then change.
 
 **A publication configured ahead of its data stays selectable and says why.**
 That was #7's user story 6 and the reason the chooser guards only `is_forecast`:

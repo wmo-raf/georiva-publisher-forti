@@ -37,6 +37,27 @@ not public. A readiness page that omitted it would report "ready" about a
 publication the very next build refuses — which is precisely the fault this
 module exists to repair, recreated one refusal further down.
 
+## One finding can silence another
+
+The step count is the only finding that describes a publish rather than a fact,
+and it says nothing at all while anything above it is blocked. ``plan`` refuses
+at the collection, the mapping or the units *before* it reaches the step
+intersection, so a count rendered beside such a row would promise a publish that
+is not going to happen — and a green row beside a red one reads as the part that
+is fine.
+
+## Where the rules come from
+
+Every rule here is the planner's, reached through the planner:
+:func:`~.planner.readable_without_credentials`, :func:`~.planner.cog_hrefs`,
+:func:`~.planner.shared_times`, :func:`~.planner.spans_a_period`, and
+:data:`~.models.NOT_A_FORECAST` and :data:`~.planner.NOT_PUBLIC` for the two
+sentences a refusal and a finding have to say identically. What is written here
+is the *prose a form needs* — "this resolves itself", "fill the blank rows in
+below" — which an exception raised into a build log has no use for. Rules
+shared, wording per audience: the reverse arrangement is the one where the form
+promises a number the build disagrees with.
+
 ## What it does not ask
 
 It reads the database and nothing else: no bucket, no status document, no
@@ -47,13 +68,13 @@ this module does not say it a second time in different words.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
 from . import planner
 from .models import NOT_A_FORECAST
+from .prose import listed, stamp
 from .units import same_unit, symbol_of
 from .windows import publishable
 
@@ -86,11 +107,6 @@ UNANSWERABLE = "unanswerable"
 #: row rather than a separate judgment that could disagree with it.
 SEVERITY = (BLOCKED, WAITING, UNANSWERABLE, PARTIAL, READY)
 
-#: What a publication can be in and still publish. ``PARTIAL`` is in here and
-#: that is the point of its existing: a run mid-ingestion publishes, and
-#: publishes again with more steps when the rest lands.
-PUBLISHABLE = (READY, PARTIAL)
-
 #: What each state says out loud. Deliberately not the constant: "not ready yet"
 #: and "needs a change" are the two sentences an operator acts on, and the
 #: vocabulary above is for the code that compares them.
@@ -110,7 +126,10 @@ STATE_LABELS = {
 #: rule here renders in the table's ordinary text rather than in another's colour.
 STATE_CLASSES = {
     READY: "w-text-positive-100",
-    PARTIAL: "w-text-positive-100",
+    # Warning rather than positive, which is how :mod:`~.verification` already
+    # colours a state that is neither good nor bad: "still ingesting" publishes,
+    # and an operator who reads it as "ready" has been told the run is finished.
+    PARTIAL: "w-text-warning-100",
     WAITING: "w-text-grey-400",
     BLOCKED: "w-text-critical-200",
     UNANSWERABLE: "w-text-grey-400",
@@ -137,17 +156,28 @@ VERDICTS = {
 }
 
 
-@dataclass(frozen=True)
-class Finding:
-    """One question about this publication, answered."""
+#: The six questions, in the order an operator meets them: the key a caller names
+#: a finding by, and the words the page heads its row with. One table rather than
+#: a pair of arguments at each construction, so that the key a test asks for and
+#: the subject a reader sees cannot come apart.
+SUBJECTS = {
+    "forecast": "Forecast collection",
+    "visibility": "Collection visibility",
+    "runs": "Closed runs",
+    "slots": "Slot coverage",
+    "units": "Units",
+    "steps": "Steps the latest run would publish",
+}
 
-    key: str
-    subject: str
-    state: str
-    #: The answer in as few words as it takes — a count, a date, "agree". Read
-    #: down the column; :attr:`detail` is read when one of them is surprising.
-    answer: str
-    detail: str = ""
+
+class _Stated:
+    """The two words a state is rendered as, for whatever holds one.
+
+    On a mixin rather than written on both dataclasses below, which is the
+    duplication it replaces: a finding's state and the section's state are the
+    same vocabulary, and a rule added to one and not the other would colour a row
+    differently from the summary that is derived from it.
+    """
 
     @property
     def state_label(self) -> str:
@@ -159,7 +189,23 @@ class Finding:
 
 
 @dataclass(frozen=True)
-class Readiness:
+class Finding(_Stated):
+    """One question about this publication, answered."""
+
+    key: str
+    state: str
+    #: The answer in as few words as it takes — a count, a date, "agree". Read
+    #: down the column; :attr:`detail` is read when one of them is surprising.
+    answer: str
+    detail: str = ""
+
+    @property
+    def subject(self) -> str:
+        return SUBJECTS[self.key]
+
+
+@dataclass(frozen=True)
+class Readiness(_Stated):
     """Every finding, and the one word they add up to."""
 
     findings: tuple[Finding, ...] = ()
@@ -176,18 +222,6 @@ class Readiness:
         return next((state for state in SEVERITY if state in states), READY)
 
     @property
-    def can_publish(self) -> bool:
-        return self.state in PUBLISHABLE
-
-    @property
-    def state_label(self) -> str:
-        return STATE_LABELS.get(self.state, self.state)
-
-    @property
-    def state_class(self) -> str:
-        return STATE_CLASSES.get(self.state, "")
-
-    @property
     def verdict(self) -> str:
         return VERDICTS.get(self.state, "")
 
@@ -202,17 +236,29 @@ def report(publication) -> Readiness:
     collection = publication.collection
     run = RunIngestion.latest_closed(collection)
     mapped = publication.mapped_variables()
+    blank, foreign = _unresolved_slots(collection, publication, mapped)
 
-    return Readiness(
-        findings=(
-            _forecast(collection),
-            _visibility(collection),
-            _runs(collection, run),
-            _slots(collection, publication, mapped),
-            _units(mapped),
-            _steps(collection, run, mapped),
-        )
+    above = (
+        _forecast(collection),
+        _visibility(collection),
+        _runs(collection, run),
+        _slots(collection, mapped, blank, foreign),
+        _units(mapped),
     )
+    return Readiness(findings=(*above, _steps(collection, run, mapped, refused=_any_blocked(above))))
+
+
+def _any_blocked(findings) -> bool:
+    """Whether a publish would be refused before it counted a single step.
+
+    Every :data:`BLOCKED` finding above the step count is one ``planner.plan``
+    raises on *before* it reaches the intersection — the collection, the
+    mapping, the units — so a step count rendered beside one would be a promise
+    about a publish that is not going to happen. Asked of the findings rather
+    than by re-testing their conditions, which is what keeps the two from
+    disagreeing when a finding is added.
+    """
+    return any(finding.state == BLOCKED for finding in findings)
 
 
 def _forecast(collection) -> Finding:
@@ -230,10 +276,9 @@ def _forecast(collection) -> Finding:
     free to drift from it.
     """
     if collection.is_forecast:
-        return Finding(key="forecast", subject="Forecast collection", state=READY, answer="yes")
+        return Finding(key="forecast", state=READY, answer="yes")
     return Finding(
         key="forecast",
-        subject="Forecast collection",
         state=BLOCKED,
         answer="no",
         detail=NOT_A_FORECAST,
@@ -253,18 +298,13 @@ def _visibility(collection) -> Finding:
     may only be narrower. What decides the refusal is the collection's, so that
     is what this row reads.
     """
-    if collection.visibility == collection.Visibility.PUBLIC:
-        return Finding(key="visibility", subject="Collection visibility", state=READY, answer="public")
+    if planner.readable_without_credentials(collection):
+        return Finding(key="visibility", state=READY, answer="public")
     return Finding(
         key="visibility",
-        subject="Collection visibility",
         state=BLOCKED,
         answer=collection.visibility,
-        detail=(
-            f"{collection.slug} is {collection.visibility}, not public. A Forti reader presents "
-            f"no credential, so there is nobody to check a restricted collection against and the "
-            f"build refuses rather than serving it to anyone who asks."
-        ),
+        detail=planner.NOT_PUBLIC.format(slug=collection.slug, visibility=collection.visibility),
     )
 
 
@@ -281,7 +321,6 @@ def _runs(collection, run) -> Finding:
     if run is None:
         return Finding(
             key="runs",
-            subject="Closed runs",
             state=WAITING,
             answer="none yet",
             detail=(
@@ -292,25 +331,22 @@ def _runs(collection, run) -> Finding:
         )
     return Finding(
         key="runs",
-        subject="Closed runs",
         state=READY,
-        answer=f"{closed}, latest {_stamp(run.reference_time)}",
+        answer=f"{closed}, latest {stamp(run.reference_time)}",
         detail="",
     )
 
 
-def _slots(collection, publication, mapped: dict) -> Finding:
-    """Whether every slot resolves to a variable this publication can read.
+def _unresolved_slots(collection, publication, mapped: dict) -> tuple[list, list]:
+    """The slots that do not resolve, in the two ways one can fail to.
 
-    Two ways one does not, and they are one finding rather than two because they
-    are one question — *does this slot resolve?* — and an operator reads the
-    answer as one row. The messages are the planner's own reasons in fewer
-    words: a **blank** slot is a configuration nobody finished, and a slot
-    naming a variable of **another collection** is one that would have no asset
-    at any timestep.
+    Worked out once and read twice — by the finding that reports it and by the
+    step count, which cannot be counted without it — rather than by two
+    comprehensions that would have to be kept saying the same thing.
 
-    Both are :data:`BLOCKED`. Neither is fixed by any run closing, which is the
-    whole of what separates this row from the one above it.
+    **Blank** is asked of the publication, which already answers it. **Foreign**
+    is the planner's other refusal: a variable of another collection has no
+    asset at any timestep of this one's runs.
     """
     blank = publication.unmapped_slots(mapped)
     foreign = [
@@ -318,22 +354,24 @@ def _slots(collection, publication, mapped: dict) -> Finding:
         for key, variable in mapped.items()
         if variable is not None and variable.collection_id != collection.pk
     ]
-    filled = len(mapped) - len(blank)
+    return blank, foreign
 
+
+def _slots(collection, mapped: dict, blank: list, foreign: list) -> Finding:
+    """Whether every slot resolves to a variable this publication can read.
+
+    Both ways of failing are one finding rather than two, because they are one
+    question — *does this slot resolve?* — and an operator reads the answer as
+    one row.
+
+    Both are :data:`BLOCKED`. Neither is fixed by any run closing, which is the
+    whole of what separates this row from the one above it.
+    """
+    filled = len(mapped) - len(blank)
+    answer = f"{filled} of {len(mapped)}"
     if blank or foreign:
-        return Finding(
-            key="slots",
-            subject="Slot coverage",
-            state=BLOCKED,
-            answer=f"{filled} of {len(mapped)}",
-            detail=_slot_detail(collection, blank, foreign),
-        )
-    return Finding(
-        key="slots",
-        subject="Slot coverage",
-        state=READY,
-        answer=f"{filled} of {len(mapped)}",
-    )
+        return Finding(key="slots", state=BLOCKED, answer=answer, detail=_slot_detail(collection, blank, foreign))
+    return Finding(key="slots", state=READY, answer=answer)
 
 
 def _units(mapped: dict) -> Finding:
@@ -351,7 +389,6 @@ def _units(mapped: dict) -> Finding:
     if not filled:
         return Finding(
             key="units",
-            subject="Units",
             state=UNANSWERABLE,
             answer="nothing to compare",
             detail="No slot names a variable yet, so there is no unit to compare with the slot's.",
@@ -367,7 +404,6 @@ def _units(mapped: dict) -> Finding:
     if wrong:
         return Finding(
             key="units",
-            subject="Units",
             state=BLOCKED,
             answer=f"{len(wrong)} disagree",
             detail=(
@@ -375,67 +411,67 @@ def _units(mapped: dict) -> Finding:
                 "wrong number under a right-looking label: " + "; ".join(wrong) + "."
             ),
         )
-    return Finding(key="units", subject="Units", state=READY, answer=f"{len(filled)} agree")
+    return Finding(key="units", state=READY, answer=f"{len(filled)} agree")
 
 
-def _steps(collection, run, mapped: dict) -> Finding:
+def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
     """How many steps the latest closed run would actually publish.
 
     The **intersection** across every slot, which is what
     :func:`~.planner.plan` publishes and for its reason: variables of one run
     ingest independently and finish at different step counts, and a step some
     slots have and others do not is a partial forecast Forti cannot express.
-    The count is read through the planner's own two functions rather than a
-    second query shaped like them, so the number on this page and the number the
-    build writes cannot become two numbers.
+    The count is read through the planner's own functions rather than a second
+    query and a second rule shaped like them, so the number on this page and the
+    number the build writes cannot become two numbers.
 
-    Unanswerable rather than blocked when a slot is blank or foreign: there is
-    nothing wrong *here*, and the row above already says what is.
+    **It answers nothing while anything above is blocked.** A publish refused at
+    the collection, the mapping or the units never reaches the intersection, so a
+    count rendered beside such a row would be a promise about a publish that is
+    not going to happen — and a green row beside a red one reads as the part that
+    is fine. Unanswerable rather than blocked, because there is nothing wrong
+    *here*: the row above already says what is.
     """
+    if refused:
+        return Finding(
+            key="steps",
+            state=UNANSWERABLE,
+            answer="not until the rows above",
+            detail=(
+                "A publish is refused before it counts a step while anything above needs a "
+                "change, so what it would publish cannot be said yet."
+            ),
+        )
     if run is None:
         return Finding(
             key="steps",
-            subject="Steps the latest run would publish",
             state=UNANSWERABLE,
             answer="no run to count",
             detail="There is no closed run yet, so there is no step list to intersect.",
         )
-    if any(variable is None or variable.collection_id != collection.pk for variable in mapped.values()):
-        return Finding(
-            key="steps",
-            subject="Steps the latest run would publish",
-            state=UNANSWERABLE,
-            answer="mapping unfinished",
-            detail=(
-                "A step counts only when every slot has a COG for it, so this cannot be counted "
-                "until every slot names a variable of this collection."
-            ),
-        )
 
     hrefs = planner.cog_hrefs(collection, run.reference_time, mapped)
     shared = planner.shared_times(hrefs)
-    stamp = _stamp(run.reference_time)
+    when = stamp(run.reference_time)
 
     if not shared:
         return Finding(
             key="steps",
-            subject="Steps the latest run would publish",
             state=WAITING,
             answer="none yet",
             detail=(
-                f"No timestep of {stamp} has a COG for every slot. Variables of one run ingest "
+                f"No timestep of {when} has a COG for every slot. Variables of one run ingest "
                 f"independently, so this resolves itself as they land."
             ),
         )
 
-    if not any(parameter.is_period for parameter in publishable(shared, params.ALL_PARAMETERS)):
+    if not planner.spans_a_period(publishable(shared, params.ALL_PARAMETERS)):
         return Finding(
             key="steps",
-            subject="Steps the latest run would publish",
             state=WAITING,
             answer=f"{len(shared)}, spanning no window",
             detail=(
-                f"{stamp} has {len(shared)} shared step(s) and no two of them are a period window "
+                f"{when} has {len(shared)} shared step(s) and no two of them are a period window "
                 f"apart, so there would be no precipitation and no symbol. Instant values alone "
                 f"are not a forecast, and a run with more steps in it spans one."
             ),
@@ -446,48 +482,28 @@ def _steps(collection, run, mapped: dict) -> Finding:
     if behind:
         return Finding(
             key="steps",
-            subject="Steps the latest run would publish",
             state=PARTIAL,
             answer=f"{len(shared)} of {reached}",
             detail=(
-                f"{_list(behind)} has fewer steps of {stamp} than the rest, so a publish now "
+                f"{listed(behind)} has fewer steps of {when} than the rest, so a publish now "
                 f"carries {len(shared)} of the {reached} steps the run has reached. Nothing needs "
                 f"doing: the stragglers land and the next publish carries them."
             ),
         )
 
-    return Finding(
-        key="steps",
-        subject="Steps the latest run would publish",
-        state=READY,
-        answer=f"{len(shared)} steps",
-        detail="",
-    )
+    return Finding(key="steps", state=READY, answer=f"{len(shared)} steps")
 
 
 def _slot_detail(collection, blank: list, foreign: list) -> str:
     said = []
     if blank:
         said.append(
-            f"Nothing is mapped to {_list(blank)}. Every slot has to name a variable of "
+            f"Nothing is mapped to {listed(blank)}. Every slot has to name a variable of "
             f"{collection.slug} before this can publish — fill the blank rows in below."
         )
     if foreign:
         said.append(
-            f"{_list(foreign)} names a variable outside {collection.slug}, which has no asset at "
+            f"{listed(foreign)} names a variable outside {collection.slug}, which has no asset at "
             f"any timestep of this collection's runs."
         )
     return " ".join(said)
-
-
-def _list(names) -> str:
-    """Names as a sentence reads them, matching :func:`~.mapping._list`."""
-    names = list(names)
-    if len(names) == 1:
-        return names[0]
-    return f"{', '.join(names[:-1])} and {names[-1]}"
-
-
-def _stamp(moment: datetime) -> str:
-    """A run's reference time as this plugin writes one everywhere else."""
-    return moment.strftime("%Y-%m-%dT%H:%MZ")

@@ -29,6 +29,7 @@ tested without one.
 from dataclasses import dataclass
 
 from . import parameters as params
+from .prose import listed
 
 #: A variable that also fills another slot. The same series is then published
 #: twice under two names — deliberate for a collection that genuinely has one
@@ -108,9 +109,9 @@ def _shared_message(variable, shared: tuple[str, ...]) -> str:
     that these slots are the same series, and an operator reading either row
     should learn the whole of it without having to find the other.
     """
-    published = " and as ".join(_list(params.BY_SLOT[key].feeds) for key in shared)
+    published = " and as ".join(listed(params.BY_SLOT[key].feeds) for key in shared)
     return (
-        f"{variable.slug!r} fills {_list(shared)}. The same series would then be published "
+        f"{variable.slug!r} fills {listed(shared)}. The same series would then be published "
         f"as {published} — reasonable when a collection has one field where the format "
         f"expects two, and also exactly what filling a slot from the row above by mistake "
         f"looks like."
@@ -146,15 +147,6 @@ def _range_message(slot, variable) -> str:
         f"unit's numbers under the right unit label looks like, which the unit check cannot "
         f"see."
     )
-
-
-def _list(names) -> str:
-    """Names as a sentence reads them, so a message about one slot does not say
-    "1 slot" and a message about three does not run them together."""
-    names = list(names)
-    if len(names) == 1:
-        return names[0]
-    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def _number(value: float) -> str:

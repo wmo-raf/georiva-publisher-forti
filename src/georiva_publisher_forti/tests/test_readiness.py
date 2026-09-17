@@ -38,9 +38,9 @@ class ReadinessTests(TestCase):
         self.collection = make_collection()
         self.publication = make_publication(self.collection)
 
-    def finding(self, report, subject):
+    def finding(self, report, key):
         """One finding by its key, so a test names what it is asserting about."""
-        return next(finding for finding in report.findings if finding.key == subject)
+        return next(finding for finding in report.findings if finding.key == key)
 
     # -- the distinction -----------------------------------------------------
 
@@ -52,7 +52,6 @@ class ReadinessTests(TestCase):
 
         self.assertEqual(self.finding(report, "runs").state, readiness.WAITING)
         self.assertEqual(report.state, readiness.WAITING)
-        self.assertFalse(report.can_publish)
 
     def test_a_blank_slot_will_never_publish_on_its_own(self):
         """The other half of the distinction. Waiting fixes a run that has not
@@ -66,13 +65,13 @@ class ReadinessTests(TestCase):
         self.assertEqual(self.finding(report, "slots").state, readiness.BLOCKED)
         self.assertIn("2t", self.finding(report, "slots").detail)
         self.assertEqual(report.state, readiness.BLOCKED)
-        self.assertFalse(report.can_publish)
 
     def test_a_unit_that_disagrees_is_a_change_rather_than_a_wait(self):
         """Forti copies units out of ``meta.json`` without converting, so this
         is the refusal that would otherwise be met at the first publish — and
         the one an operator most needs to meet before it, because the publish it
         stops is the one that would have served a number wrong by 273."""
+        write_cogs(self.collection, self.path, steps=9)
         make_run(self.collection)
         kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
         variable = self.collection.variables.get(slug="2t")
@@ -85,7 +84,6 @@ class ReadinessTests(TestCase):
         self.assertEqual(units.state, readiness.BLOCKED)
         self.assertIn("2t", units.detail)
         self.assertIn("K", units.detail)
-        self.assertFalse(report.can_publish)
 
     def test_a_complete_run_says_how_many_steps_it_would_publish(self):
         """The figure the build log carried and nothing rendered. An operator
@@ -100,7 +98,6 @@ class ReadinessTests(TestCase):
         self.assertEqual(steps.state, readiness.READY)
         self.assertIn("9", steps.answer)
         self.assertEqual(report.state, readiness.READY)
-        self.assertTrue(report.can_publish)
 
     def test_a_run_whose_stragglers_have_not_landed_publishes_fewer_steps(self):
         """The number an operator otherwise discovers by publishing. Variables
@@ -117,7 +114,6 @@ class ReadinessTests(TestCase):
         self.assertEqual(steps.answer, "8 of 9")
         self.assertIn("tp", steps.detail)
         self.assertEqual(report.state, readiness.PARTIAL)
-        self.assertTrue(report.can_publish)
 
     def test_a_collection_that_stopped_being_a_forecast_is_reported_as_such(self):
         """The chooser offers forecast collections and the model refuses the
@@ -198,3 +194,23 @@ class ReadinessTests(TestCase):
 
         self.assertEqual(steps.state, readiness.WAITING)
         self.assertEqual(steps.answer, "none yet")
+
+    def test_nothing_downstream_of_a_blocked_finding_answers_green(self):
+        """The failure this rule exists to stop. The run is complete and its
+        steps are countable, so the count comes out — but `plan` refuses at the
+        units before it ever reaches the intersection, and a green "9 steps"
+        beside a red row is a promise about a publish that is not going to
+        happen. Read as a whole, the page would say one thing is wrong and the
+        rest is fine."""
+        write_cogs(self.collection, self.path, steps=9)
+        make_run(self.collection)
+        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
+        variable = self.collection.variables.get(slug="2t")
+        variable.unit = kelvin
+        variable.save(update_fields=["unit"])
+
+        report = readiness.report(self.publication)
+
+        self.assertEqual(self.finding(report, "units").state, readiness.BLOCKED)
+        self.assertEqual(self.finding(report, "steps").state, readiness.UNANSWERABLE)
+        self.assertEqual(report.state, readiness.BLOCKED)
