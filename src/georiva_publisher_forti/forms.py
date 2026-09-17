@@ -76,9 +76,9 @@ EMPTY_LABEL = "— not mapped —"
 ACKNOWLEDGEMENT_LABEL = "I have read the warnings above and mean this mapping."
 
 ACKNOWLEDGEMENT_REQUIRED = (
-    "This mapping is unusual rather than wrong, so nothing here will stop you — but it has to "
-    "be a decision rather than an oversight. Read the warnings above and tick the box, or change "
-    "the slots they are about."
+    "You are changing this mapping into one that is unusual rather than wrong, so nothing here "
+    "will stop you — but it has to be a decision rather than an oversight. Read the warnings "
+    "above and tick the box, or change the slots they are about."
 )
 
 COLLECTION_IS_MAPPED = (
@@ -163,6 +163,10 @@ class VariableMappingMixin:
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._concerns = None
+        #: Whether this submit moves a slot. False until :meth:`clean` says
+        #: otherwise, which is also the right answer for a form nobody has
+        #: submitted: reading a warned mapping is not changing it.
+        self._remapping = False
 
         if not self.has_mapping:
             # The add form. Removed rather than left empty: a chooser with no
@@ -234,11 +238,18 @@ class VariableMappingMixin:
     def acknowledgement(self):
         """The tick-box, when there is something to tick it for.
 
-        Absent when the mapping raises nothing, because a box that appears on
-        every save is a box that gets ticked without being read — and the whole
-        value of this one is that it is rare.
+        Two conditions, and the second is what keeps the first worth reading.
+        There must be a warning — and this submit must be *making* the mapping
+        it warns about. A publication that lives with a standing warning is
+        edited for other reasons: its extent is corrected, its slug is read, its
+        visibility is narrowed. Demanding the box on every one of those turns it
+        into furniture, ticked without being read, which is the whole of what it
+        was supposed not to be.
+
+        The warning itself is shown either way. What is conditional is being
+        stopped by it.
         """
-        if not self.has_mapping or not self.mapping_concerns():
+        if not self.has_mapping or not self.mapping_concerns() or not self._remapping:
             return None
         return self[ACKNOWLEDGE_FIELD]
 
@@ -260,10 +271,21 @@ class VariableMappingMixin:
             posted[slot.key] = variable
 
         self._concerns = mapping.concerns(posted)
-        if self._concerns and not cleaned.get(ACKNOWLEDGE_FIELD):
+        self._remapping = self._moves_a_slot(posted)
+        if self.acknowledgement is not None and not cleaned.get(ACKNOWLEDGE_FIELD):
             self.add_error(ACKNOWLEDGE_FIELD, ACKNOWLEDGEMENT_REQUIRED)
 
         return cleaned
+
+    def _moves_a_slot(self, posted: dict) -> bool:
+        """Whether this submit changes what fills any slot.
+
+        Compared against what the publication currently holds rather than
+        against the form's ``initial``, which is the same thing on the first
+        render and is stale by exactly one edit after a concurrent one.
+        """
+        stored = self.instance.mapped_variables()
+        return any(_pk(posted.get(key)) != _pk(stored.get(key)) for key in params.SLOT_KEYS)
 
     def _slot_accepts(self, slot_key: str, variable, name: str) -> bool:
         """Whether the model would take this variable in this slot.
@@ -300,7 +322,10 @@ class VariableMappingMixin:
         if collection is None or collection.pk == self.instance.collection_id:
             return
 
-        filled = self.instance.variable_mappings.exclude(variable=None).count()
+        # Asked through the publication's own reading of its mapping rather than
+        # by querying its rows from here: "how many slots are filled" is the
+        # publication's question and it already answers the other half of it.
+        filled = len(params.SLOT_KEYS) - len(self.instance.unmapped_slots())
         if filled:
             self.add_error(
                 "collection",
@@ -338,6 +363,10 @@ class VariableMappingMixin:
             row = rows.get(slot.key) or FortiVariableMapping(publication=self.instance, slot=slot.key)
             row.variable = self.cleaned_data.get(field_name(slot.key))
             row.save()
+
+
+def _pk(variable):
+    return variable.pk if variable else None
 
 
 def _mapping_fields() -> dict:

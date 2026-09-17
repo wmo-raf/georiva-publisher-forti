@@ -99,14 +99,28 @@ unit check reads the label.
 
 ### The acknowledgement is per submit and is not stored
 
-A tick-box, shown only when something was raised, required when it is. Not a
-model field, because what is acknowledged is *those* warnings at *that* submit: a
-stored flag would go on claiming an acknowledgement after the mapping it was
-given for had been edited away, which is the failure mode of every "I have read
-the above" that persists.
+A tick-box. Not a model field, because what is acknowledged is *those* warnings
+at *that* submit: a stored flag would go on claiming an acknowledgement after the
+mapping it was given for had been edited away, which is the failure mode of every
+"I have read the above" that persists.
 
-Shown only when raised, because a box present at every save is a box ticked
-without being read, and the whole value of this one is that it is rare.
+It is asked for under **two** conditions, and the second is what keeps the first
+worth reading. There must be a warning — and the submit must be *making* the
+mapping it warns about. A publication deliberately mapped into a warned state is
+edited afterwards for other reasons: its extent is corrected, its visibility is
+narrowed, its slug is read. Gating each of those on the same box turns it into
+furniture, ticked without being read, which is precisely what it was supposed not
+to be. So a submit that moves no slot is not stopped.
+
+The warning is shown either way. What is conditional is being *stopped* by it —
+and the distinction matters in its own right: a variable can become suspicious
+without the mapping moving at all, because somebody restyled it on the Styling
+page. That has to be visible to whoever opens the publication next, and is no
+reason to refuse them an edit to the bbox.
+
+Applied to **both** warnings, which #13's body asks for — "Both warn and are
+acknowledged rather than blocked" — where its acceptance list spells the
+requirement out only on the shared one.
 
 This is narrower than #7's story 14, which asks for a deliberate mapping to be
 "recorded as deliberate". Recording it means a model field, a migration, and a
@@ -167,6 +181,13 @@ behind an edit form.
 path that previously succeeded and produced an unpublishable publication. It is a
 behaviour change and not only a surface one, which is why it is here rather than
 in a commit message.
+
+**A blank slot is still never re-matched.** ADR 0004 decided auto-match runs
+once, at creation, because re-running it would undo a deliberate edit — and a
+blank row is an edit like any other. So a publication configured ahead of the
+collection that will fill it is still filled in by hand, now on this page rather
+than in a shell. Suggesting the match beside a blank slot without applying it is
+the shape that would respect both, and is a ticket of its own.
 
 **Readiness is still not on this page.** Which slots resolve against the selected
 collection, how many closed runs there are, and how many steps the latest run

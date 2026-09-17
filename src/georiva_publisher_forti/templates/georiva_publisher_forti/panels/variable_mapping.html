@@ -89,17 +89,27 @@
         color: var(--w-color-critical-200);
     }
 
+    /**
+     * A tinted note rather than amber text, which is how `verification_panel.html`
+     * already renders a warning and the reason it does: `--w-color-warning-100` is
+     * a background colour, and set as a foreground it reads at about 2:1 against
+     * the admin's own surface. The words carry the warning; the tint only finds it.
+     */
     .fm-concern {
         margin: 0.5em 0 0;
+        padding: 0.5em 0.7em;
         font-size: 0.85em;
-        color: var(--w-color-warning-100);
+        background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
+        border-left: 3px solid color-mix(in srgb, var(--w-color-warning-100) 55%, transparent);
+        border-radius: 0 3px 3px 0;
         max-width: 40em;
     }
 
     .fm-ack {
         margin: 1.2em 0 0;
         padding: 0.9em 1em;
-        border: 1px solid var(--w-color-warning-100);
+        background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
+        border: 1px solid color-mix(in srgb, var(--w-color-warning-100) 45%, transparent);
         border-radius: 3px;
         max-width: 48em;
     }

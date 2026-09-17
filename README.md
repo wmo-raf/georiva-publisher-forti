@@ -202,8 +202,11 @@ Three answers, not two:
 | A blank slot | saves, shown as `no variable yet` |
 | Everything else | **not checked**, and the page says so |
 
-The acknowledgement is a tick-box that appears only when something was raised, and
-is not stored: what is acknowledged is *those* warnings at *that* submit.
+The acknowledgement is a tick-box that appears when something was raised **and this
+submit moves a slot**, and it is not stored: what is acknowledged is *those* warnings
+at *that* submit. A publication already living with a warning is not asked again
+when its extent or visibility is edited — the warning is still shown, it just does
+not stop an edit nobody made it with.
 
 The warnings are drawn by `mapping.concerns()` and are deliberately weak. The range
 check compares the variable's declared range — which core documents as a styling

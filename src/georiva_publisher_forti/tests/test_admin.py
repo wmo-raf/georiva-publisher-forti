@@ -329,29 +329,87 @@ class WarningTests(MappingEditorMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.stored("2d"), self.variable("2t"))
 
-    def test_a_declared_range_that_cannot_reach_the_slot_warns(self):
-        """Kelvin numbers under a celsius unit row: the unit check agrees,
-        because the unit row is what it reads."""
-        variable = self.variable("2t")
-        variable.value_min, variable.value_max = 200.0, 320.0
-        variable.save(update_fields=["value_min", "value_max"])
+    def kelvin_numbers_in_celsius(self):
+        """A variable whose unit row says degC over a range only kelvin reaches.
 
-        response = self.post()
+        The unit check agrees with it, because the unit row is what the unit
+        check reads. The declared range is the only thing left that disagrees,
+        and core calls that a styling hint — which is exactly why this warns.
+        """
+        return Variable.objects.create(
+            collection=self.collection,
+            slug="t2m-restated",
+            name="t2m-restated",
+            unit=self.variable("2t").unit,
+            value_min=200.0,
+            value_max=320.0,
+        )
+
+    def test_a_declared_range_that_cannot_reach_the_slot_warns(self):
+        response = self.remap("2t", self.kelvin_numbers_in_celsius())
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(forms.ACKNOWLEDGE_FIELD, response.context["form"].errors)
+        self.assertEqual(self.stored("2t"), self.variable("2t"))
 
     def test_an_acknowledged_odd_range_saves(self):
+        odd = self.kelvin_numbers_in_celsius()
+
+        response = self.remap("2t", odd, acknowledge=True)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.stored("2t"), odd)
+
+    def test_a_range_retuned_under_a_saved_mapping_warns_without_blocking(self):
+        """The mapping did not move — somebody restyled the variable it names.
+        The page has to say so, and has no business stopping an edit to the
+        extent over a change the operator being stopped did not make."""
         variable = self.variable("2t")
         variable.value_min, variable.value_max = 200.0, 320.0
         variable.save(update_fields=["value_min", "value_max"])
 
-        self.assertEqual(self.post(acknowledge=True).status_code, 302)
+        self.assertEqual(self.post().status_code, 302)
+        self.assertContains(self.client.get(self.url), "styling hint")
 
     def test_an_ordinary_mapping_needs_no_acknowledgement(self):
         """The acknowledgement is not a box on every save — a page that asked
         for one unconditionally would be ticked without being read."""
         self.assertEqual(self.post().status_code, 302)
+
+    def test_living_with_a_warning_is_not_re_asked_at_every_save(self):
+        """A publication that has been deliberately mapped into a warned state
+        is edited afterwards for other reasons — the extent corrected, the
+        visibility narrowed. Asking again at each of those is how a rare box
+        becomes furniture."""
+        self.remap("2d", self.variable("2t"), acknowledge=True)
+
+        response = self.post(north=6.0)
+
+        self.assertEqual(response.status_code, 302)
+        self.publication.refresh_from_db()
+        self.assertEqual(self.publication.north, 6.0)
+
+    def test_the_warning_is_still_shown_on_that_save(self):
+        """Shown either way; what is conditional is being stopped by it. A
+        warning that disappeared once acknowledged would leave the page claiming
+        a mapping nobody had any remaining doubt about."""
+        self.remap("2d", self.variable("2t"), acknowledge=True)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "dew_point_temperature_2m")
+        self.assertIsNone(response.context["form"].acknowledgement)
+
+    def test_moving_any_slot_asks_again(self):
+        """Touching the mapping at all is reason enough: the warnings are about
+        the mapping as a whole, and an operator editing one row is reading the
+        rows around it."""
+        self.remap("2d", self.variable("2t"), acknowledge=True)
+
+        response = self.remap("tcc", None)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(forms.ACKNOWLEDGE_FIELD, response.context["form"].errors)
 
     def test_a_blank_slot_saves_and_asks_for_nothing(self):
         """A publication may be configured while its collection is still
