@@ -39,8 +39,18 @@ from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
 from .models import GENERATIONS_PER_REVISION
+from .prose import stamp
 from .units import same_unit, symbol_of
 from .windows import publishable
+
+#: Why a collection nobody may read anonymously is not published, said once for
+#: both surfaces that say it: this refusal, and the readiness finding that
+#: reports it before the refusal is met. Same reason
+#: :data:`~.models.NOT_A_FORECAST` is a constant.
+NOT_PUBLIC = (
+    "{slug} is {visibility}, not public. A Forti reader presents no credential, so there is "
+    "nobody to check a restricted collection against."
+)
 
 
 class NothingToPublish(Exception):
@@ -142,19 +152,19 @@ def plan(publication) -> PublishPlan:
 
     by_slot = _resolve_slots(publication)
 
-    hrefs_by_slot = _cog_hrefs(collection, run.reference_time, by_slot)
-    times = _shared_times(hrefs_by_slot)
+    hrefs_by_slot = cog_hrefs(collection, run.reference_time, by_slot)
+    times = shared_times(hrefs_by_slot)
     if not times:
         raise NothingToPublish(
-            f"{collection.slug} @ {run.reference_time:%Y-%m-%dT%H:%MZ}: no timestep has a COG "
+            f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has a COG "
             f"for every variable. Variables of one run ingest independently, so this "
             f"resolves itself as the stragglers land."
         )
 
     chosen = publishable(times, params.ALL_PARAMETERS)
-    if not any(parameter.is_period for parameter in chosen):
+    if not spans_a_period(chosen):
         raise NothingToPublish(
-            f"{collection.slug} @ {run.reference_time:%Y-%m-%dT%H:%MZ}: {len(times)} step(s) "
+            f"{collection.slug} @ {stamp(run.reference_time)}: {len(times)} step(s) "
             f"span no period window at all. Instant values alone are a forecast with no "
             f"precipitation and no symbol."
         )
@@ -213,13 +223,19 @@ def _generation_for(publication, run) -> int:
     return generation
 
 
+def readable_without_credentials(collection) -> bool:
+    """Whether a reader presenting nothing may be served this collection.
+
+    A predicate rather than only a refusal, because :mod:`~.readiness` asks the
+    same question before a publish and has to get the same answer: a rule stated
+    twice is one that disagrees with itself the first time either copy is edited.
+    """
+    return collection.visibility == collection.Visibility.PUBLIC
+
+
 def _refuse_unpublishable_collection(collection) -> None:
-    if collection.visibility != collection.Visibility.PUBLIC:
-        raise PublicationRefused(
-            f"{collection.slug} is {collection.visibility}, not public. A Forti reader "
-            f"presents no credential, so there is nobody to check a restricted "
-            f"collection against."
-        )
+    if not readable_without_credentials(collection):
+        raise PublicationRefused(NOT_PUBLIC.format(slug=collection.slug, visibility=collection.visibility))
 
 
 def _resolve_slots(publication) -> dict:
@@ -284,8 +300,14 @@ def _resolve_slots(publication) -> dict:
     return by_slot
 
 
-def _cog_hrefs(collection, reference_time, by_slot) -> dict:
+def cog_hrefs(collection, reference_time, by_slot) -> dict:
     """``{slot key: {time: href}}`` for one run's COG assets.
+
+    Public because :mod:`~.readiness` asks the same question ahead of a publish
+    rather than during one, and the step count it reports has to be the count
+    this produces. Two readings of "which COGs does this run have" is the
+    arrangement in which the form promises a number the build then disagrees
+    with.
 
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
@@ -310,7 +332,18 @@ def _cog_hrefs(collection, reference_time, by_slot) -> dict:
     return hrefs
 
 
-def _shared_times(hrefs_by_slot) -> list:
+def spans_a_period(parameters) -> bool:
+    """Whether a run publishing these parameters publishes a period series.
+
+    Instant values alone are a forecast with no precipitation and no symbol, so
+    :func:`plan` refuses one — and :mod:`~.readiness` reports the same condition
+    ahead of it. The rule lives here, once, rather than as the same comprehension
+    written on both sides of the refusal.
+    """
+    return any(parameter.is_period for parameter in parameters)
+
+
+def shared_times(hrefs_by_slot) -> list:
     """The timesteps every slot has, in order."""
     if not hrefs_by_slot:
         return []

@@ -1,0 +1,123 @@
+{% load i18n %}
+{% comment %}
+    Whether this publication would publish, on the page it is configured from.
+
+    Every distinction here was drawn in `readiness.py` and arrives as a word: the
+    state of each finding, the state of the whole, and the sentence that says
+    what to do about it. Nothing is decided in an `{% if %}` — the rule
+    `panels/publish_history.html` and `panels/variable_mapping.html` already
+    follow, and the one that lets "not ready yet" and "needs a change" be told
+    apart by a test that renders nothing.
+
+    The verdict is above the table rather than under it. An operator opening this
+    page is asking one question, and the rows are what they read *after* the
+    answer surprises them.
+
+    A detail sits under the answer it is about rather than in a column of its
+    own: most rows have none, and a column of mostly blanks reads as missing data
+    where what is true is that a settled finding has nothing more to say.
+
+    The badge is Wagtail's own `w-status` pill coloured by one of its own utility
+    classes, which is what `tables/residency_cell.html` and the history panel
+    already do — a plugin has no business shipping admin CSS for what the admin
+    already has. The style block is here rather than in `{% block extra_css %}`
+    because a panel is a fragment inside somebody else's form and has no blocks
+    to fill; the classes are prefixed `fr-` for the same reason `fm-`, `fh-` and
+    `fv-` are on the other three.
+{% endcomment %}
+<style>
+    .fr-lead {
+        color: var(--w-color-grey-400);
+        margin: 0 0 1em;
+        max-width: 48em;
+    }
+
+    .fr-verdict {
+        display: flex;
+        align-items: baseline;
+        gap: 0.7em;
+        margin: 0 0 1.2em;
+        max-width: 48em;
+    }
+
+    .fr-verdict-text {
+        font-weight: 600;
+    }
+
+    .fr-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .fr-table th,
+    .fr-table td {
+        text-align: left;
+        padding: 0.6em 0.8em 0.6em 0;
+        border-bottom: 1px solid var(--w-color-border-furniture);
+        vertical-align: top;
+    }
+
+    .fr-table thead th {
+        font-size: 0.75em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--w-color-grey-400);
+        white-space: nowrap;
+    }
+
+    .fr-subject {
+        font-weight: 600;
+        max-width: 18em;
+    }
+
+    .fr-answer {
+        max-width: 40em;
+    }
+
+    .fr-detail {
+        margin: 0.35em 0 0;
+        font-size: 0.85em;
+        color: var(--w-color-grey-400);
+    }
+
+    .fr-state {
+        white-space: nowrap;
+    }
+</style>
+
+<p class="fr-lead">
+    {% blocktrans trimmed %}
+        What a publish would meet, read from the database before anything is written. These are
+        the facts a build discovers on its own — so a publication that is merely early reads as
+        early here, rather than as a failure in a log after the fact.
+    {% endblocktrans %}
+</p>
+
+<p class="fr-verdict">
+    <span class="w-status {{ readiness.state_class }}">{{ readiness.state_label }}</span>
+    <span class="fr-verdict-text">{{ readiness.verdict }}</span>
+</p>
+
+<table class="fr-table">
+    <thead>
+        <tr>
+            <th scope="col">{% trans "Finding" %}</th>
+            <th scope="col">{% trans "Answer" %}</th>
+            <th scope="col">{% trans "State" %}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for finding in readiness.findings %}
+            <tr>
+                <th scope="row" class="fr-subject">{{ finding.subject }}</th>
+                <td class="fr-answer">
+                    {{ finding.answer }}
+                    {% if finding.detail %}<p class="fr-detail">{{ finding.detail }}</p>{% endif %}
+                </td>
+                <td class="fr-state">
+                    <span class="w-status {{ finding.state_class }}">{{ finding.state_label }}</span>
+                </td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
