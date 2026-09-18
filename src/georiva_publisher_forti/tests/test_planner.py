@@ -225,7 +225,7 @@ class SourceValidationTests(PlannerTestCase):
         with self.assertRaises(PublicationRefused) as ctx:
             plan(self.publication)
 
-        self.assertIn("no credential", str(ctx.exception))
+        self.assertIn("Only public collections", str(ctx.exception))
 
 
 class ParameterSelectionTests(PlannerTestCase):

@@ -47,36 +47,59 @@ one version and one organisation; a configuration sha describes one document
 governing every tenant and narrows to nobody. That difference is the whole of
 why one of these is an organisation's and the other is not.
 
-The last two surfaces — :class:`ReadinessPanel` and :class:`PublishHistoryPanel`
-— are the only ones that ask nothing of the serving plane: whether a publication
-*would* publish and what it has *attempted* are both questions the database
-answers on its own. They therefore sit where an operator already is when they ask
-them — on the publication's own page — and inherit that page's narrowing rather
-than declaring a second one. They are also the pair an operator reads in order:
-what a publish would meet, at the top of the form, and what publishes have
-actually done, at the foot of it.
+The publication itself has three pages, and the split between them is the
+difference between changing a thing and reading it:
+
+**The form** is the decisions and nothing else. Everything the model *reports* —
+its readiness, its status, what it last published, every attempt it has made —
+used to be rendered on the edit page too, and an operator who opened it to
+correct a bbox was reading a diagnosis first.
+
+**The inspect page** is where that reporting went. It is the publication's home:
+what it is, whether it would publish, what fills each slot, what it last wrote,
+and everything it has attempted — in that order, which is the order the
+questions arrive in. Every save of the form and of the mapping returns here, so
+the consequence of a change is read where it shows. It reads the database and
+nothing else, for the reason the history panel always gave: a page behind object
+storage's deadline is one that cannot be opened while the bucket is slow.
+
+**The mapping page** is the eight slots on a page of their own, reached from the
+listing and from the inspect page, and the page a new publication lands on so
+that what auto-match found is read by the one person who can judge it. Its rule
+is in :mod:`~.forms`.
+
+Every page that takes a pk narrows to the active organisation: the snippet views
+through ``OrgScopedViewSetMixin``, the hand-written ones through
+``get_org_object_or_404`` — so a foreign pk is a 404 before anything is built.
 """
 
 import logging
 
 from django.contrib import messages
 from django.forms.models import ModelChoiceIterator
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import path, reverse, reverse_lazy
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy as _
+from django.views.decorators.http import require_POST
 from wagtail import hooks
 from wagtail.admin.auth import permission_denied
 from wagtail.admin.menu import MenuItem
-from wagtail.admin.panels import FieldPanel, MultiFieldPanel, ObjectList, Panel
+from wagtail.admin.panels import FieldPanel, MultiFieldPanel, ObjectList
+from wagtail.admin.ui.menus import MenuItem as RowMenuItem
 from wagtail.admin.ui.tables import Column
+from wagtail.permissions import ModelPermissionPolicy
 from wagtail.snippets.models import register_snippet
-from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, SnippetViewSet
+from wagtail.snippets.views.snippets import CreateView, EditView, IndexView, InspectView, SnippetViewSet
 
+from georiva.core.menus import PUBLICATIONS_MENU_HOOK
+from georiva.organisations.access import get_org_object_or_404
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
 from . import forms, history, readiness, verification
 from .models import FortiPublication
+
+SNIPPET = "wagtailsnippets_georiva_publisher_forti_fortipublication"
 
 logger = logging.getLogger(__name__)
 
@@ -167,122 +190,85 @@ class ResidencyColumn(Column):
         return self.resident.of(instance)
 
 
-class VariableMappingPanel(Panel):
-    """The eight slots, on the page that knows which collection they are of.
+#: The fields the inspect page reads as the publication's identity, and the
+#: ones it reads as its last build. Named here rather than left to Wagtail's
+#: "every concrete field" default because that default would also list the lock
+#: bookkeeping, which is nobody's question.
+IDENTITY_FIELDS = (
+    "collection",
+    "slug",
+    "visibility",
+    "is_enabled",
+    "west",
+    "south",
+    "east",
+    "north",
+    "time_until_next_hours",
+    "generation",
+)
+LAST_BUILD_FIELDS = (
+    "status",
+    "built_at",
+    "published_version",
+    "published_reference_time",
+    "published_step_count",
+    "published_parameters",
+    "point_count",
+    "grid_id",
+    "error",
+)
 
-    **A panel over eight fields, not an inline panel.** The slot set is fixed by
-    the format — derived from the parameter map, not typed out — so there is
-    nothing to add and nothing to remove. An ``InlinePanel`` would offer both,
-    and an operator who used either would find the publish refused by a slot
-    that is missing or duplicated, over a shape the mapping cannot take.
 
-    **Hidden on the add form.** A slot chooses between the variables of *this
-    publication's* collection, and on the add form there is no collection yet.
-    Creation seeds all eight rows by slug auto-match, which is the rule the
-    planner used before the mapping was data, so the common case still asks for
-    no decisions at all and this page is where the uncommon one is answered.
+def can_change(user) -> bool:
+    """The one gate the mapping page and the re-queue share with the form.
 
-    Everything rendered here is decided in :mod:`~.forms` — which slots warn,
-    which were refused, which are unfilled, and what the form is entitled to
-    claim it checked. See :class:`PublishHistoryPanel` on why that split is the
-    one this plugin keeps making.
+    Wagtail's own ``change`` permission on the model, which is what the snippet
+    edit view asks — so an operator who may edit the publication may map it and
+    re-queue it, and one who may only look at it may do neither.
+    """
+    return ModelPermissionPolicy(FortiPublication).user_has_permission(user, "change")
+
+
+class FortiPublicationInspectView(InspectView):
+    """The publication's home: what it is, and everything it reports.
+
+    Five sections in the order an operator's questions arrive — what is this,
+    can it publish, what does it publish, what did it last publish, what has it
+    been doing. The first and fourth are model fields rendered by Wagtail's own
+    machinery; the other three are :mod:`~.readiness`, the mapping and
+    :mod:`~.history`, each of which decides its words before the template sees
+    them. Nothing here reads the serving plane; residency is the listing's.
     """
 
-    class BoundPanel(Panel.BoundPanel):
-        template_name = "georiva_publisher_forti/panels/variable_mapping.html"
+    template_name = "georiva_publisher_forti/inspect.html"
+    fields = [*IDENTITY_FIELDS, *LAST_BUILD_FIELDS]
 
-        def is_shown(self):
-            return bool(self.form and self.form.has_mapping)
+    def get_field_display_value(self, field_name, field):
+        """Wagtail's own reading, with three things it renders badly read for
+        it: an absent value prints as ``None``, a boolean as ``True`` and a JSON
+        list as its Python repr."""
+        value = super().get_field_display_value(field_name, field)
+        if value is None or value == "":
+            return "—"
+        if value is True or value is False:
+            return _("Yes") if value else _("No")
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value)
+        return value
 
-        def get_context_data(self, parent_context=None):
-            context = super().get_context_data(parent_context)
-            context["rows"] = self.form.mapping_rows()
-            context["acknowledgement"] = self.form.acknowledgement
-            context["incomplete_label"] = forms.INCOMPLETE_LABEL
-            context["checks_made"] = forms.CHECKS_MADE
-            context["checks_not_made"] = forms.CHECKS_NOT_MADE
-            return context
-
-
-class ReadinessPanel(Panel):
-    """Whether this publication would publish, beside the form it is configured on.
-
-    The facts it renders were always discoverable and were only ever discovered
-    **by publishing** — into a build log nothing rendered, one refusal at a time,
-    in the order the planner happens to check them. An operator who had
-    configured a publication a day early and one who had left a slot blank read
-    the same page and waited the same way.
-
-    **On the publication's own page, above the mapping it reports on.** The
-    question is asked while configuring, and the row that most often answers it —
-    slot coverage — is about the section immediately below. Answer first, then
-    the thing to change.
-
-    **Hidden on the add form.** Readiness is a reading of a collection's runs and
-    a publication's mapping, and on the add form there is neither: the collection
-    is being chosen on the form itself and no mapping exists until creation seeds
-    one.
-
-    **It reads the database and nothing else**, exactly as
-    :class:`PublishHistoryPanel` does and for the same reason — an edit form
-    behind object storage's deadline is one that cannot be used to correct a bbox
-    while the bucket is slow.
-
-    Everything rendered is decided in :mod:`~.readiness`. See
-    :class:`PublishHistoryPanel` on why that split is the one this plugin keeps
-    making.
-    """
-
-    class BoundPanel(Panel.BoundPanel):
-        template_name = "georiva_publisher_forti/panels/readiness.html"
-
-        def is_shown(self):
-            return bool(self.instance and self.instance.pk and self.instance.collection_id)
-
-        def get_context_data(self, parent_context=None):
-            context = super().get_context_data(parent_context)
-            context["readiness"] = readiness.report(self.instance)
-            return context
-
-
-class PublishHistoryPanel(Panel):
-    """Every attempt this publication has made, on the publication's own page.
-
-    The rows have been recorded since the plugin's first publish and nothing has
-    ever rendered one. The publication holds only the *latest* state — a failed
-    build overwrites the previous error in place — so an operator could see that
-    the last publish failed and could not tell a first failure from a week of
-    them.
-
-    **A panel on the edit page, not a page of its own.** The edit page is where
-    an operator already is when they ask what a publication has been doing, and
-    it is already narrowed to their organisation: ``OrgScopedViewSetMixin``
-    scopes every single-object view, so a foreign pk is a 404 before this panel
-    is built. A separate route would be a second place that narrowing has to be
-    remembered, which is the arrangement in which one of the two is later
-    forgotten.
-
-    **It reads the database and nothing else.** Every other Forti surface reads
-    the serving plane, and putting object storage's deadline behind an edit form
-    would mean a bbox could not be corrected while the bucket was slow. The
-    question this panel answers — what has this publication done — is answerable
-    without asking any remote process, so it asks none.
-    """
-
-    class BoundPanel(Panel.BoundPanel):
-        template_name = "georiva_publisher_forti/panels/publish_history.html"
-
-        def is_shown(self):
-            """Hidden on the add form, where there is no publication to have a
-            history: a reverse relation on an unsaved instance raises rather
-            than coming back empty, and an empty history section above a form
-            that has never been saved would answer a question nobody asked."""
-            return bool(self.instance and self.instance.pk)
-
-        def get_context_data(self, parent_context=None):
-            context = super().get_context_data(parent_context)
-            context["history"] = history.report(self.instance)
-            return context
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        by_name = dict(zip(self.fields, context["fields"], strict=True))
+        context["identity"] = [by_name[name] for name in IDENTITY_FIELDS]
+        context["last_build"] = [by_name[name] for name in LAST_BUILD_FIELDS]
+        context["readiness"] = readiness.report(self.object)
+        context["mapping"] = forms.mapping_summary(self.object)
+        context["history"] = history.report(self.object)
+        context["mapping_url"] = reverse("forti_publication_mapping", args=[self.object.pk])
+        context["queue_rebuild_url"] = reverse("forti_publication_queue_rebuild", args=[self.object.pk])
+        context["can_change"] = can_change(self.request.user)
+        context["incomplete_label"] = forms.INCOMPLETE_LABEL
+        return context
 
 
 class FortiPublicationIndexView(IndexView):
@@ -317,28 +303,64 @@ class FortiPublicationIndexView(IndexView):
         columns.insert(after + 1, residency)
         return columns
 
+    def get_list_more_buttons(self, instance):
+        """Mapping beside Edit, on every row: it is the other half of
+        configuring a publication, and the listing is where an operator goes
+        to find the one they mean to configure."""
+        buttons = super().get_list_more_buttons(instance)
+        if can_change(self.request.user):
+            buttons.append(
+                RowMenuItem(
+                    _("Variables"),
+                    url=reverse("forti_publication_mapping", args=[instance.pk]),
+                    icon_name="list-ul",
+                    priority=15,
+                )
+            )
+        return buttons
+
 
 class FortiPublicationCreateView(ForecastCollectionsOnlyMixin, CreateView):
-    pass
+    def get_success_url(self):
+        """Straight to the mapping page, not the listing.
+
+        Creation has just seeded eight rows by auto-match, and whether it found
+        eight or five is a thing only the operator can judge — so they are shown
+        it now, while the collection is still in mind, rather than left to
+        re-open the publication and find out.
+        """
+        return reverse("forti_publication_mapping", args=[self.object.pk])
 
 
 class FortiPublicationEditView(ForecastCollectionsOnlyMixin, EditView):
-    pass
+    def get_success_url(self):
+        """Back to the inspect page, where the consequence of the edit shows."""
+        return inspect_url(self.object)
 
 
 class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     model = FortiPublication
     icon = "site"
-    menu_label = "Forti publications"
+    # "Forti" under a group already called Publications — the page heading and
+    # the model keep the longer name, which they carry without a parent.
+    menu_label = "Forti"
+    # Into core's Publications group, which is what makes this a plugin's entry
+    # rather than a plugin deciding it deserves top-level rank in the sidebar.
+    menu_hook = PUBLICATIONS_MENU_HOOK
     list_display = ["slug", "collection", "visibility", "status", "published_version", "built_at"]
     list_filter = ["status", "visibility", "is_enabled"]
     index_view_class = FortiPublicationIndexView
     add_view_class = FortiPublicationCreateView
     edit_view_class = FortiPublicationEditView
+    inspect_view_enabled = True
+    inspect_view_class = FortiPublicationInspectView
+    # A copy would carry the name, which is refused as taken, and the area,
+    # which is the one thing a second publication of the same collection may
+    # not share. There is nothing here worth copying.
+    copy_view_enabled = False
     # An ``ObjectList`` rather than ``panels``, for the one thing only it can
-    # carry: the base form class. The eight slot choosers are fields of the form
-    # rather than of the model — the mapping is a related table — so they have to
-    # arrive with the form class the panel tree is built from.
+    # carry: the base form class, which holds the one mapping rule the form
+    # still enforces.
     edit_handler = ObjectList(
         [
             MultiFieldPanel(
@@ -348,16 +370,9 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                     FieldPanel("visibility"),
                     FieldPanel("is_enabled"),
                 ],
-                heading="What is published",
-                help_text=(
-                    "The slug is the name a consumer asks by — GET /api/forecast/"
-                    "{slug}/ — and a segment of every storage key, so it is fixed "
-                    "once this model has published. Leave it and the visibility "
-                    "blank to take the catalog slug and the collection's own tier."
-                ),
+                heading="Forecast",
+                help_text="Which collection to publish, and what to call it in the Forti app.",
             ),
-            ReadinessPanel(heading="Readiness", icon="clipboard-list"),
-            VariableMappingPanel(heading="The variable mapping", icon="list-ul"),
             MultiFieldPanel(
                 [
                     FieldPanel("west"),
@@ -365,14 +380,10 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                     FieldPanel("east"),
                     FieldPanel("north"),
                 ],
-                heading="Extent",
+                heading="Area",
                 help_text=(
-                    "The points that exist. Give it a margin past the area you care "
-                    "about: a border town is asked for from both sides, and an area "
-                    "that stops at the boundary answers 'outside coverage' to half of "
-                    "them. Changing this changes the point list, which is pinned — "
-                    "the next build refuses rather than republishing under a grid "
-                    "that moved."
+                    "The area the forecast covers. Include a margin past your borders. "
+                    "Cannot be changed after the first publish."
                 ),
             ),
             MultiFieldPanel(
@@ -381,10 +392,8 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                     FieldPanel("generation"),
                 ],
                 heading="Advanced",
+                help_text="Usually left alone.",
             ),
-            FieldPanel("status", read_only=True),
-            FieldPanel("error", read_only=True),
-            PublishHistoryPanel(heading="History", icon="history"),
         ],
         base_form_class=forms.FortiPublicationForm,
     )
@@ -396,6 +405,11 @@ register_snippet(FortiPublicationViewSet)
 @hooks.register("register_admin_urls")
 def register_forti_admin_urls():
     return [
+        path(
+            "forti/publication/<int:publication_pk>/mapping/",
+            mapping_page,
+            name="forti_publication_mapping",
+        ),
         path(
             "forti/publication/<int:publication_pk>/queue-rebuild/",
             queue_rebuild,
@@ -462,6 +476,63 @@ def verification_panel(request):
     return render(request, "georiva_publisher_forti/verification_panel.html", context)
 
 
+def inspect_url(publication) -> str:
+    """Where every save of a publication returns to — see the module docstring."""
+    return reverse(f"{SNIPPET}:inspect", args=[publication.pk])
+
+
+def _scoped_publication(request, publication_pk):
+    """This organisation's publication or a 404, with the two joins every
+    hand-written page reads on the way to a breadcrumb."""
+    return get_org_object_or_404(
+        request,
+        FortiPublication.objects.select_related("collection", "collection__catalog"),
+        pk=publication_pk,
+    )
+
+
+def mapping_page(request, publication_pk):
+    """The eight slots, on the page that knows which collection they are of.
+
+    Reached from the listing, from the inspect page, and as the page a new
+    publication lands on. Saving returns to the inspect page: every path in
+    here ends with the same question — is it ready now? — and that page's
+    readiness is the answer. Everything rendered is decided in :mod:`~.forms`.
+    """
+    publication = _scoped_publication(request, publication_pk)
+    if not can_change(request.user):
+        return permission_denied(request)
+
+    if request.method == "POST":
+        form = forms.VariableMappingForm(publication, request.POST)
+        if form.is_valid():
+            form.save()
+            messages.success(request, _("The variables of %s are saved.") % publication.slug)
+            return redirect(inspect_url(publication))
+    else:
+        form = forms.VariableMappingForm(publication)
+
+    context = {
+        "breadcrumbs_items": [
+            {"url": reverse("wagtailadmin_home"), "label": _("Home")},
+            {"url": reverse(f"{SNIPPET}:list"), "label": _("Forti publications")},
+            {"url": inspect_url(publication), "label": publication.slug},
+            {"url": None, "label": _("Variables")},
+        ],
+        "header_title": _("Variables — %s") % publication.slug,
+        "header_icon": "list-ul",
+        "publication": publication,
+        "form": form,
+        "rows": form.mapping_rows(),
+        "acknowledgement": form.acknowledgement,
+        "incomplete_label": forms.INCOMPLETE_LABEL,
+        "checks_made": forms.CHECKS_MADE,
+        "checks_not_made": forms.CHECKS_NOT_MADE,
+    }
+    return render(request, "georiva_publisher_forti/mapping_page.html", context)
+
+
+@require_POST
 def queue_rebuild(request, publication_pk):
     """Re-queue a publication for the next sweep.
 
@@ -469,15 +540,20 @@ def queue_rebuild(request, publication_pk):
     that refuses a publication a worker is actively holding, so an impatient
     operator cannot start a second writer on one area — and the sweep picks the
     row up on its normal cadence either way.
+
+    POST only and gated like the form, as the virtual-Zarr re-queue is: a GET
+    that changed state would be one a link preview could trigger.
     """
-    publication = get_object_or_404(FortiPublication, pk=publication_pk)
+    publication = _scoped_publication(request, publication_pk)
+    if not can_change(request.user):
+        return permission_denied(request)
 
     if publication.queue_rebuild():
-        messages.success(request, f"{publication.slug} will be republished by the next sweep.")
+        messages.success(request, _("%s will be republished within a few minutes.") % publication.slug)
     else:
         messages.warning(
             request,
-            f"{publication.slug} is being published right now — leaving it to the worker that holds it.",
+            _("%s is being published right now — try again once it finishes.") % publication.slug,
         )
 
-    return redirect(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list"))
+    return redirect(inspect_url(publication))

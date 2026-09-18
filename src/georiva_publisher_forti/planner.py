@@ -48,8 +48,7 @@ from .windows import publishable
 #: reports it before the refusal is met. Same reason
 #: :data:`~.models.NOT_A_FORECAST` is a constant.
 NOT_PUBLIC = (
-    "{slug} is {visibility}, not public. A Forti reader presents no credential, so there is "
-    "nobody to check a restricted collection against."
+    "{slug} is {visibility}. Only public collections can be published to Forti — change the collection's visibility."
 )
 
 

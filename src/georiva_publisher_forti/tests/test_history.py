@@ -95,7 +95,7 @@ class PublishAttemptTests(HistoryTestCase):
         daily pass, so this figure belongs to both kinds of row."""
         self.record(**PUBLISHED, versions_pruned=2)
 
-        self.assertEqual(self.figures(self.only())["versions pruned"], 2)
+        self.assertEqual(self.figures(self.only())["old versions removed"], 2)
 
     def test_a_publish_that_pruned_nothing_does_not_claim_a_figure(self):
         """Nearly every publish prunes nothing — there are five slots and a run
@@ -103,7 +103,7 @@ class PublishAttemptTests(HistoryTestCase):
         repeated figure on the page and mean nothing on any row."""
         self.record(**PUBLISHED)
 
-        self.assertNotIn("versions pruned", self.figures(self.only()))
+        self.assertNotIn("old versions removed", self.figures(self.only()))
 
 
 class NothingToDoTests(HistoryTestCase):
@@ -206,7 +206,7 @@ class RetentionPassTests(HistoryTestCase):
         like."""
         self.record(kind=GC, versions_pruned=3)
 
-        self.assertEqual(self.figures(self.only()), {"versions pruned": 3})
+        self.assertEqual(self.figures(self.only()), {"old versions removed": 3})
 
     def test_a_retention_pass_that_failed_carries_its_error_too(self):
         self.record(kind=GC, outcome=FAILURE, error="ClientError: An error occurred (AccessDenied)")

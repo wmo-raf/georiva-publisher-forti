@@ -1,6 +1,6 @@
 {% load i18n %}
 {% comment %}
-    Whether this publication would publish, on the page it is configured from.
+    Whether this publication would publish, on the page it is read from.
 
     Every distinction here was drawn in `readiness.py` and arrives as a word: the
     state of each finding, the state of the whole, and the sentence that says
@@ -87,9 +87,7 @@
 
 <p class="fr-lead">
     {% blocktrans trimmed %}
-        What a publish would meet, read from the database before anything is written. These are
-        the facts a build discovers on its own — so a publication that is merely early reads as
-        early here, rather than as a failure in a log after the fact.
+        Whether this forecast can be published right now, and what is in the way if not.
     {% endblocktrans %}
 </p>
 
@@ -101,7 +99,7 @@
 <table class="fr-table">
     <thead>
         <tr>
-            <th scope="col">{% trans "Finding" %}</th>
+            <th scope="col">{% trans "Check" %}</th>
             <th scope="col">{% trans "Answer" %}</th>
             <th scope="col">{% trans "State" %}</th>
         </tr>

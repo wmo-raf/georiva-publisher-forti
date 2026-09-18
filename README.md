@@ -187,10 +187,13 @@ slot is celsius into celsius, and every layer downstream agrees.
 
 ### Editing it
 
-**The variable mapping** section of the publication's own page in the admin, which
-renders the eight slots and only those. It is absent from the *add* form, where no
-collection has been chosen and there are therefore no variables to choose between;
-creation seeds all eight rows by auto-match, and editing happens afterwards.
+**Publications → Forti → *one model* → Mapping**: a page of its own, reached from
+the listing row and from the inspect page, rendering the eight slots and only
+those. It is not on the publication form, where the collection is still being
+chosen and there are therefore no variables to choose between; creation seeds
+all eight rows by auto-match and lands the operator on this page, so that what
+auto-match found is read by the one person who can judge it. Saving returns to
+the inspect page, whose readiness is the answer to "is it ready now?".
 
 Three answers, not two:
 
@@ -205,8 +208,8 @@ Three answers, not two:
 The acknowledgement is a tick-box that appears when something was raised **and this
 submit moves a slot**, and it is not stored: what is acknowledged is *those* warnings
 at *that* submit. A publication already living with a warning is not asked again
-when its extent or visibility is edited — the warning is still shown, it just does
-not stop an edit nobody made it with.
+when its mapping is re-saved unchanged — the warning is still shown, it just does
+not stop a submit nobody made it with.
 
 The warnings are drawn by `mapping.concerns()` and are deliberately weak. The range
 check compares the variable's declared range — which core documents as a styling
@@ -220,8 +223,8 @@ the page rather than only in this file. An operator who reads a saved mapping as
 verified one has been misled by the surface.
 
 A **filled** mapping cannot follow its publication to another collection: the rows
-name variables of the collection they were filled from, so the change is refused.
-Clear the mapping first, or make a second publication.
+name variables of the collection they were filled from, so the publication form
+refuses the change. Clear the mapping first, or make a second publication.
 
 From a shell, equivalently:
 
@@ -254,10 +257,10 @@ See `docs/adr/0004-the-variable-mapping-is-data.md` and
 
 ## Readiness
 
-**Snippets → Forti publications → *one model*** carries a **Readiness** section
-above the variable mapping: what a publish would meet, read from the database
-before anything is written, and before the form is saved. Every fact in it was discoverable before
-only by publishing — one refusal at a time, into a build log nothing rendered.
+**Publications → Forti → *one model* → Inspect** carries a **Readiness** section
+above the mapping: what a publish would meet, read from the database before
+anything is written. Every fact in it was discoverable before only by
+publishing — one refusal at a time, into a build log nothing rendered.
 
 Six findings, in the order an operator meets them:
 
@@ -289,12 +292,12 @@ The whole section's verdict is its **worst** finding's state, derived rather tha
 stored so that the summary and the rows cannot disagree.
 
 It reads the database and nothing else — no bucket, no status document, no
-raster — for the same reason the history panel does: an edit form behind object
-storage's deadline cannot be used to correct a bbox while the bucket is slow.
+raster — for the same reason the history panel does: a page behind object
+storage's deadline cannot be opened while the bucket is slow.
 
 And it says nothing about whether the bytes would be *right*. Dew point in the
-air-temperature slot passes all six findings; what the form did and did not check
-is stated in the mapping section immediately below.
+air-temperature slot passes all six findings; what the mapping page did and did
+not check is stated on that page, in full.
 
 See `docs/adr/0006-readiness-tells-not-yet-from-never.md`.
 
@@ -592,7 +595,7 @@ botocore's retry ladder.
 
 ### Resident, on the publications listing
 
-**Snippets → Forti publications** carries a **Resident** column beside
+**Publications → Forti** carries a **Resident** column beside
 **Published version**, and an organisation administrator sees it for their own
 publications. Published and resident are two facts: the database says a version
 was written, and `rawdataforecaster` says which version it is actually holding.
@@ -612,9 +615,9 @@ The status document lists every area at once, so the whole listing is served by
 **one** read rather than one per row: a read per row would put object storage's
 deadline on the page instead of on the read.
 
-### History, on a publication's own page
+### History, on a publication's inspect page
 
-**Snippets → Forti publications → *one model*** ends with a **History** panel:
+**Publications → Forti → *one model* → Inspect** ends with a **History** section:
 every publish attempt and every retention pass, newest first, with what it did
 and — for a failure — the error beside the attempt rather than in a log search.
 The rows have always been recorded; until now nothing rendered one, and the
@@ -633,9 +636,8 @@ Two things it says that the columns do not:
   the re-queue button on a current publication.
 
 It reads the database and nothing else — no status document, no bucket. Every
-other Forti surface reads the serving plane, and an edit form behind object
-storage's deadline is one that cannot be used to correct a bbox while the bucket
-is slow.
+other Forti surface reads the serving plane, and a page behind object storage's
+deadline is one that cannot be opened while the bucket is slow.
 
 What bounds the table is **retention**: the daily pass deletes rows older than
 thirty days, and thirty days of the busiest plausible cadence is under two

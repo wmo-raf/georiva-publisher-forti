@@ -111,10 +111,8 @@ def _shared_message(variable, shared: tuple[str, ...]) -> str:
     """
     published = " and as ".join(listed(params.BY_SLOT[key].feeds) for key in shared)
     return (
-        f"{variable.slug!r} fills {listed(shared)}. The same series would then be published "
-        f"as {published} — reasonable when a collection has one field where the format "
-        f"expects two, and also exactly what filling a slot from the row above by mistake "
-        f"looks like."
+        f"{variable.slug!r} is used for both {listed(shared)}, so the same data would be "
+        f"published as {published}. Check this is what you mean."
     )
 
 
@@ -139,13 +137,9 @@ def _range_is_unreachable(slot, variable) -> bool:
 def _range_message(slot, variable) -> str:
     low, high = slot.plausible
     return (
-        f"{variable.slug!r} declares {_number(variable.value_min)} to "
-        f"{_number(variable.value_max)} and the {slot.key} slot publishes values within "
-        f"{_number(low)} to {_number(high)} {slot.units}. A declared range is a styling "
-        f"hint rather than a measurement, so this is a suspicion and not a finding — but a "
-        f"range that does not reach the slot's at all is what a variable holding another "
-        f"unit's numbers under the right unit label looks like, which the unit check cannot "
-        f"see."
+        f"{variable.slug!r} has a value range of {_number(variable.value_min)} to "
+        f"{_number(variable.value_max)}, but {slot.key} is normally {_number(low)} to "
+        f"{_number(high)} {slot.units}. The numbers may be in a different unit than the label says."
     )
 
 

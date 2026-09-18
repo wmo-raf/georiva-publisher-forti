@@ -20,10 +20,10 @@
     mapping as a verified one has been misled by this page, and no amount of
     correct checking above makes that better.
 
-    The style block is here rather than in `{% block extra_css %}` because a
-    panel is a fragment inside somebody else's form and has no blocks to fill;
-    the classes are prefixed `fm-` for the same reason `fh-` is on the history
-    panel and `fv-` on the verification one.
+    The style block is here rather than in `{% block extra_css %}` because this
+    is a fragment inside somebody else's form — `mapping_page.html` — and has
+    no blocks to fill; the classes are prefixed `fm-` for the same reason `fh-`
+    is on the history panel and `fv-` on the verification one.
 {% endcomment %}
 <style>
     .fm-lead {
@@ -150,18 +150,16 @@
 
 <p class="fm-lead">
     {% blocktrans trimmed %}
-        Which variable of this collection fills each role the parameter map reads. The eight are
-        fixed by the format and pre-filled by slug where the collection already uses the expected
-        name, so this is an override rather than a set of decisions. A slot left blank saves, and
-        the publish is refused by slot name until something fills it.
+        Choose which variable of the collection to publish as each Forti parameter. Rows were
+        pre-filled where the names matched. Publishing waits until every row is set.
     {% endblocktrans %}
 </p>
 
 <table class="fm-table">
     <thead>
         <tr>
-            <th scope="col">{% trans "Slot" %}</th>
-            <th scope="col">{% trans "Published as" %}</th>
+            <th scope="col">{% trans "Forti parameter" %}</th>
+            <th scope="col">{% trans "Shown in the app as" %}</th>
             <th scope="col">{% trans "Variable" %}</th>
         </tr>
     </thead>
@@ -206,11 +204,11 @@
 {% endif %}
 
 <div class="fm-checks">
-    <p class="fm-checks-heading">{% trans "What this form checked" %}</p>
+    <p class="fm-checks-heading">{% trans "What was checked" %}</p>
     <ul>
         {% for sentence in checks_made %}<li>{{ sentence }}</li>{% endfor %}
     </ul>
-    <p class="fm-checks-heading">{% trans "What it did not check" %}</p>
+    <p class="fm-checks-heading">{% trans "What was not checked" %}</p>
     <ul>
         {% for sentence in checks_not_made %}<li>{{ sentence }}</li>{% endfor %}
     </ul>

@@ -61,7 +61,7 @@ FAILED = "failed"
 BADGE_LABELS = {
     PUBLISHED: "published",
     UNCHANGED: "nothing to do",
-    PRUNED: "pruned",
+    PRUNED: "cleaned up",
     FAILED: "failed",
 }
 
@@ -83,10 +83,10 @@ BADGE_CLASSES = {
 #: empty string — so without this a failed attempt that established no figures
 #: renders as an empty row, which is the one row on the page that must never be
 #: silent.
-NO_MESSAGE = "Failed without a message. The worker's log for this run has the traceback."
+NO_MESSAGE = "Failed without a message. Ask your administrator to check the logs."
 
 PUBLISH_LABEL = "Publish"
-RETENTION_LABEL = "Retention"
+RETENTION_LABEL = "Clean-up"
 
 #: Every figure a row can carry, in the order a publish establishes them, under
 #: the names the plan and the bucket use rather than the column names. One
@@ -99,7 +99,7 @@ FIGURES = (
     ("point_count", "points"),
     ("parameter_count", "parameters"),
     ("objects_written", "objects written"),
-    ("versions_pruned", "versions pruned"),
+    ("versions_pruned", "old versions removed"),
 )
 
 

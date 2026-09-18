@@ -78,19 +78,17 @@ _OPENNESS = {"public": 2, "private": 1, "internal": 0, "": 0}
 #: ``NothingToPublish: has no closed run`` — true, one step downstream of the
 #: cause, and recorded in a build log nothing renders.
 NOT_A_FORECAST = (
-    "Only a forecast collection can be published. Nothing opens a run for a "
-    "collection that is not one, and a Forti model publishes one closed run at a "
-    "time — a reference time and the steps out from it — so this publication "
-    "would have nothing to transpose, ever. Tick 'Is forecast' on the collection "
-    "if that is what it holds; otherwise this is not the collection to publish."
+    "Only a forecast collection can be published. If this collection holds forecasts, "
+    "tick 'Is forecast' on the collection first."
 )
 
+#: The slug is a segment of every key already on the bucket: a rename would leave
+#: ``latest/<org>.<stored>`` pointing at bytes no retention pass looks at, while
+#: readers keep serving the old name and the new one has nothing under it until
+#: the next run. Said to the operator only as the consequence.
 _RENAME_REFUSED = (
-    "This model has published as {stored!r} and cannot be renamed to {wanted!r}. "
-    "The slug is a segment of every key already on the bucket: the rename would "
-    "leave latest/<org>.{stored} pointing at bytes no retention pass looks at any "
-    "more, while readers keep serving the old name and the new one has nothing "
-    "under it until the next run. Create a second publication instead."
+    "This forecast has already been published as {stored!r} and cannot be renamed to "
+    "{wanted!r}. Create a new publication instead."
 )
 
 
@@ -221,22 +219,16 @@ class FortiPublication(BuildDisciplinedModel):
         "georivacore.Collection",
         on_delete=models.CASCADE,
         related_name="forti_publication",
-        help_text=(
-            "The forecast collection this model publishes. A collection that is "
-            "not a forecast is refused — nothing opens a run for one, so there "
-            "would be nothing to transpose. So is an internal collection: it is "
-            "a derivation intermediate, not a dataset."
-        ),
+        help_text="The forecast collection to publish. Only forecast collections can be published.",
     )
 
     slug = models.SlugField(
         max_length=50,
         blank=True,
+        verbose_name="Name",
         help_text=(
-            "The model name a consumer asks for: GET /api/forecast/{slug}/. "
-            "Unique within the organisation, in the same grammar as the catalog "
-            "slug it is prefilled from — leave it blank to take that. Immutable "
-            "once published: it is a segment of every storage key."
+            "The name this forecast is served under, e.g. 'kenya'. Leave blank to use the "
+            "catalog's name. Cannot be changed after the first publish."
         ),
     )
 
@@ -250,27 +242,25 @@ class FortiPublication(BuildDisciplinedModel):
         blank=True,
         default="",
         help_text=(
-            "Who may ask for this model. Blank takes the collection's, which is "
-            "the usual answer; it may be narrowed from there but never widened "
-            "past it. A caller who may not see a model finds it absent from the "
-            "listing and 404s on it directly, so the endpoint cannot be used to "
-            "enumerate what a tenant publishes."
+            "Who can see this forecast. Leave blank to use the collection's setting. "
+            "It can be more restricted than the collection, never less."
         ),
     )
 
     is_enabled = models.BooleanField(
         default=True,
-        help_text="Disabled publications are skipped by the sweep and dropped from jsonformat.json.",
+        verbose_name="Enabled",
+        help_text="Untick to stop publishing this forecast without deleting it.",
     )
 
     # =========================================================================
     # Extent — the points that exist
     # =========================================================================
 
-    west = models.FloatField(help_text="Western edge, degrees east.")
-    south = models.FloatField(help_text="Southern edge, degrees north.")
-    east = models.FloatField(help_text="Eastern edge, degrees east.")
-    north = models.FloatField(help_text="Northern edge, degrees north.")
+    west = models.FloatField(verbose_name="West edge", help_text="Longitude, in degrees.")
+    south = models.FloatField(verbose_name="South edge", help_text="Latitude, in degrees.")
+    east = models.FloatField(verbose_name="East edge", help_text="Longitude, in degrees.")
+    north = models.FloatField(verbose_name="North edge", help_text="Latitude, in degrees.")
 
     # =========================================================================
     # The pinned grid (D9)
@@ -281,13 +271,12 @@ class FortiPublication(BuildDisciplinedModel):
         blank=True,
         default="",
         editable=False,
-        help_text=(
-            "MD5 of the coordinate bytes, pinned at the first build. "
-            "rawdataforecaster caches its s2 index under this, so a build that "
-            "produces a different one is refused rather than published."
-        ),
+        verbose_name="Grid",
+        # Operator-facing: the *why* — a fingerprint of the point list, pinned
+        # at the first build so a moved grid is refused — is in the README.
+        help_text="Fingerprint of the grid of points, fixed at the first publish.",
     )
-    point_count = models.PositiveIntegerField(default=0, editable=False)
+    point_count = models.PositiveIntegerField(default=0, editable=False, verbose_name="Grid points")
 
     # =========================================================================
     # What was last published (derived cache)
@@ -297,60 +286,58 @@ class FortiPublication(BuildDisciplinedModel):
         null=True,
         blank=True,
         editable=False,
-        help_text=(
-            "run.version * 100 + generation — the integer latest/<area key> "
-            "holds. The run's own half is ref_epoch_seconds * 100 + revision, "
-            "so the whole stamp orders by model time, then by republish of that "
-            "run, then by configuration generation."
-        ),
+        verbose_name="Published version",
+        # ``run.version * 100 + generation``: the run's half is
+        # ``ref_epoch_seconds * 100 + revision``, so the whole stamp orders by
+        # model time, then by republish of that run, then by configuration
+        # generation. The README has the long form.
+        help_text="Version number of what was last published. Goes up with every publish.",
     )
-    published_reference_time = models.DateTimeField(null=True, blank=True, editable=False)
+    published_reference_time = models.DateTimeField(
+        null=True, blank=True, editable=False, verbose_name="Forecast run time"
+    )
 
-    published_step_count = models.PositiveIntegerField(default=0, editable=False)
+    published_step_count = models.PositiveIntegerField(default=0, editable=False, verbose_name="Steps published")
     published_parameters = models.JSONField(
         default=list,
         blank=True,
         editable=False,
-        help_text="Forti internal names actually written, which vary with the run's step spacing.",
+        verbose_name="Parameters published",
+        help_text="The Forti parameters the last publish included.",
     )
 
     # =========================================================================
     # Configuration
     # =========================================================================
 
+    # The generation is the low two digits of the published version, and
+    # ``rawdataforecaster`` reloads only on a strictly greater version — so
+    # republishing one run under a changed configuration needs a term the run
+    # does not supply. It resets when a new run is published, because a new run
+    # at generation 0 already outranks any generation of the one before it. The
+    # README's "Republishing one run after a configuration change" has the rest.
     generation = models.PositiveSmallIntegerField(
         default=0,
+        verbose_name="Republish counter",
         validators=[
             MaxValueValidator(
                 GENERATIONS_PER_REVISION - 1,
                 message=(
-                    "At most %(limit_value)s. The generation is the low two digits of the "
-                    "published version, so one past this is not a larger number — it is "
-                    "exactly the stamp this run claims at its next revision, and the reader "
-                    "would read the second set of bytes as one it already holds. Wait for "
-                    "the next run, which resets the generation, or publish a second model."
+                    "At most %(limit_value)s republishes of one run. Wait for the next run, which resets the counter."
                 ),
             )
         ],
         help_text=(
-            "Counts changes to the published bytes that are not changes to the "
-            "run. rawdataforecaster reloads only on a strictly greater version, "
-            "so republishing one run under a changed configuration needs a term "
-            "the run does not supply — otherwise the correct new bytes sit under "
-            "the stamp the reader already holds and are never loaded. Raise it "
-            "by one and republish. It resets itself when a new run is published, "
-            "because a new run at generation 0 already outranks any generation of "
-            "the one before it."
+            "Usually leave at 0. Raise it by 1 to republish the current run after changing "
+            "settings. Resets when a new run is published."
         ),
     )
 
     time_until_next_hours = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text=(
-            "Override for complete.json's time_until_next. Left blank it is derived "
-            "from the gap between the last two closed runs."
-        ),
+        verbose_name="Hours until the next run",
+        help_text="Leave blank to work it out from the gap between the last two runs.",
     )
 
     class Meta:
@@ -482,34 +469,27 @@ class FortiPublication(BuildDisciplinedModel):
                 errors["collection"] = NOT_A_FORECAST
             elif collection.visibility == collection.Visibility.INTERNAL:
                 errors["collection"] = (
-                    "An internal collection cannot be published. It is a derivation "
-                    "intermediate read by the engine as an input — not a dataset with "
-                    "a small audience, and there is no audience to narrow it to."
+                    "An internal collection cannot be published. Internal collections are "
+                    "working data, not something people look at."
                 )
             elif _OPENNESS[self.visibility] > _OPENNESS[collection.visibility]:
                 errors["visibility"] = (
-                    f"A {self.get_visibility_display().lower()} model over a "
-                    f"{collection.get_visibility_display().lower()} collection would serve "
-                    f"through Forti what the collection is not served through anywhere "
-                    f"else. Visibility may be narrowed from the collection's, never widened."
+                    f"The collection is {collection.get_visibility_display().lower()}, so this "
+                    f"forecast cannot be {self.get_visibility_display().lower()}. It can be more "
+                    f"restricted than the collection, never less."
                 )
 
             if self.slug and self._slug_taken(collection):
-                errors["slug"] = (
-                    f"Another publication of this organisation is already the model "
-                    f"{self.slug!r}. The slug is the name a consumer asks by and a "
-                    f"segment of every storage key: two models with one name means one "
-                    f"of them is unreachable."
-                )
+                errors["slug"] = f"The name {self.slug!r} is already used by another publication. Choose another."
 
         renamed = self._published_under_another_slug()
         if renamed is not None:
             errors["slug"] = _RENAME_REFUSED.format(stored=renamed, wanted=self.slug)
 
         if self.west is not None and self.east is not None and self.west >= self.east:
-            errors["east"] = "The eastern edge must be east of the western one."
+            errors["east"] = "The east edge must be greater than the west edge."
         if self.south is not None and self.north is not None and self.south >= self.north:
-            errors["north"] = "The northern edge must be north of the southern one."
+            errors["north"] = "The north edge must be greater than the south edge."
 
         if errors:
             raise ValidationError(errors)
@@ -766,7 +746,8 @@ class FortiVariableMapping(models.Model):
     slot = models.CharField(
         max_length=32,
         choices=params.SLOT_CHOICES,
-        help_text="The role this variable fills in the parameter map.",
+        verbose_name="Forti parameter",
+        help_text="The Forti parameter this variable is published as.",
     )
 
     variable = models.ForeignKey(
@@ -783,11 +764,7 @@ class FortiVariableMapping(models.Model):
         # with the publication that owns it.
         on_delete=models.RESTRICT,
         related_name="forti_slots",
-        help_text=(
-            "The collection variable that fills this slot. Leave it blank while "
-            "the collection is still declaring its variables — the publication "
-            "then reads as not ready rather than as broken."
-        ),
+        help_text="The variable to publish as this Forti parameter. Leave blank if there is none yet.",
     )
 
     class Meta:
@@ -816,18 +793,18 @@ class FortiVariableMapping(models.Model):
         errors = {}
         if self.publication_id and self.variable.collection_id != self.publication.collection_id:
             errors["variable"] = (
-                f"{self.variable.slug!r} belongs to a different collection. A publication "
-                f"reads the COGs of its own collection, so a variable from another one has "
-                f"no asset at any timestep and the publish would fail as an empty run."
+                f"{self.variable.slug!r} belongs to a different collection. Only variables of "
+                f"this publication's own collection can be used."
             )
         elif not self._unit_agrees():
+            # Forti copies units out of ``meta.json`` without converting them,
+            # so a disagreement publishes a number wrong by a constant under a
+            # label that looks right. The refusal names what would carry it.
             slot = params.BY_SLOT[self.slot]
             have = symbol_of(self.variable)
             errors["variable"] = (
-                f"{self.variable.slug!r} is in {have!r} and the {self.slot} slot publishes "
-                f"{slot.units!r}. Forti copies units out of meta.json without converting "
-                f"them, so this would publish a number wrong by a constant under a label "
-                f"that looks right — in {', '.join(slot.feeds)}."
+                f"{self.variable.slug!r} is in {have}, but {self.slot} must be in {slot.units}. "
+                f"Units are not converted, so {', '.join(slot.feeds)} would show wrong numbers."
             )
 
         if errors:

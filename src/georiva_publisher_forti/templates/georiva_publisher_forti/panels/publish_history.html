@@ -98,9 +98,7 @@
 {% if history.entries %}
     <p class="fh-lead">
         {% blocktrans trimmed %}
-            What this publication has done, newest first. A publish attempt reports how far it
-            got, so a figure that is absent is one the attempt never reached rather than a count
-            of zero.
+            Every publish and clean-up, newest first.
         {% endblocktrans %}
     </p>
 
@@ -108,7 +106,7 @@
         <thead>
             <tr>
                 <th scope="col">{% trans "When" %}</th>
-                <th scope="col">{% trans "Pass" %}</th>
+                <th scope="col">{% trans "Action" %}</th>
                 <th scope="col">{% trans "Outcome" %}</th>
                 <th scope="col">{% trans "What it did" %}</th>
             </tr>
@@ -150,9 +148,7 @@
     {% if history.truncated %}
         <p class="fh-note">
             {% blocktrans trimmed with shown=history.entries|length total=history.total %}
-                The {{ shown }} most recent of {{ total }} kept. Rows older than thirty days are
-                removed by the daily retention pass — so a history this long usually means that
-                pass is not running.
+                Showing the {{ shown }} most recent of {{ total }}.
             {% endblocktrans %}
         </p>
     {% endif %}
@@ -164,9 +160,8 @@
     {% endcomment %}
     <p class="fh-lead">
         {% blocktrans trimmed %}
-            Nothing has been published or pruned yet. A publish runs when a run of the chosen
-            collection closes, and the sweep picks up anything it missed within five minutes;
-            every attempt from then on is listed here, whether it succeeded or not.
+            Nothing has been published yet. Publishing starts automatically when a complete
+            forecast run arrives.
         {% endblocktrans %}
     </p>
 {% endif %}
