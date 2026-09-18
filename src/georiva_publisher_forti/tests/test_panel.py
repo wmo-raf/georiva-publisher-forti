@@ -650,6 +650,15 @@ class InspectPageTests(TestCase):
         self.assertContains(response, reverse("forti_publication_mapping", args=[self.publication.pk]))
         self.assertContains(response, self.url)
 
+    def test_the_listing_offers_no_copy(self):
+        """A copy would carry the name, which is refused as taken. Nothing
+        here is worth copying, so the row does not offer to."""
+        self.sign_in()
+
+        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list"))
+
+        self.assertNotContains(response, "/copy/")
+
     def test_another_organisations_publication_is_not_inspectable(self):
         theirs = make_publication(make_collection(slug="gfs-surface", org_slug="other-org"), slug="gfs")
         self.sign_in()

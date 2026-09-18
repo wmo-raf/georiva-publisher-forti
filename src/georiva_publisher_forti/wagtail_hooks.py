@@ -354,6 +354,10 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
     edit_view_class = FortiPublicationEditView
     inspect_view_enabled = True
     inspect_view_class = FortiPublicationInspectView
+    # A copy would carry the name, which is refused as taken, and the area,
+    # which is the one thing a second publication of the same collection may
+    # not share. There is nothing here worth copying.
+    copy_view_enabled = False
     # An ``ObjectList`` rather than ``panels``, for the one thing only it can
     # carry: the base form class, which holds the one mapping rule the form
     # still enforces.
