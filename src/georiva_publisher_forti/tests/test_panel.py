@@ -20,13 +20,14 @@ They live together because they are one decision seen from both sides. Split
 apart, the listing's tests would read as a listing feature rather than as the
 repair the panel's access rule made necessary.
 
-The **detail page** is the third surface and the narrowest: one publication's own
-history, drawn from rows that carry its foreign key and nothing else. It reads
-the serving plane not at all, which is a property worth asserting rather than
-assuming — the two surfaces above both do, and a panel added to this page would
-put object storage's deadline on every edit of every publication. What is
-asserted here is the rendering and the audience; the distinctions the rendering
-depends on are :mod:`~.tests.test_history`'s, on the data.
+The **inspect page** is the third surface and the narrowest: one publication's
+own readiness, mapping, last build and history, drawn from rows that carry its
+foreign key and nothing else. It reads the serving plane not at all, which is a
+property worth asserting rather than assuming — the two surfaces above both do,
+and a read added to this page would put object storage's deadline on every look
+at every publication. What is asserted here is the rendering and the audience;
+the distinctions the rendering depends on are :mod:`~.tests.test_history`'s and
+:mod:`~.tests.test_readiness`'s, on the data.
 """
 
 import time
@@ -42,6 +43,9 @@ from georiva_publisher_forti.models import FortiPublication, FortiPublicationBui
 from .factories import make_collection, make_org_admin, make_publication, make_run, make_user
 from .sink_isolation import TemporarySinkMixin
 from .status_documents import write_forecaster
+
+INSPECT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:inspect"
+EDIT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:edit"
 
 PUBLISHED = 178835040000
 
@@ -382,22 +386,19 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
 
 class PublicationHistoryTests(TestCase):
-    """The history on one publication's own page, for the operator who owns it.
+    """The history on one publication's inspect page, for the operator who owns it.
 
     No sink mixin and no status document anywhere in this class: the page reads
     the database and nothing else, and one of the tests below is what keeps it
-    that way. An edit form that made a remote read would hold a worker on
-    object storage's deadline every time somebody opened a publication to change
-    its extent.
+    that way. A page that made a remote read would hold a worker on object
+    storage's deadline every time somebody opened a publication to see how it
+    was doing.
     """
 
     def setUp(self):
         dial_org(self.client)
         self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
-        self.url = reverse(
-            "wagtailsnippets_georiva_publisher_forti_fortipublication:edit",
-            args=[self.publication.pk],
-        )
+        self.url = reverse(INSPECT_URL, args=[self.publication.pk])
 
     def record(self, kind=None, outcome=None, publication=None, **fields):
         log = FortiPublicationBuildLog
@@ -458,8 +459,8 @@ class PublicationHistoryTests(TestCase):
 
         response = self.client.get(self.url)
 
-        self.assertContains(response, "Retention")
-        self.assertContains(response, "versions pruned")
+        self.assertContains(response, "Clean-up")
+        self.assertContains(response, "old versions removed")
 
     def test_a_publication_with_no_history_says_why_rather_than_rendering_nothing(self):
         """The state every publication is in until its first sweep, and
@@ -470,7 +471,7 @@ class PublicationHistoryTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Nothing has been published or pruned yet")
+        self.assertContains(response, "Nothing has been published yet")
 
     def test_another_organisations_history_is_not_reachable(self):
         """The narrowing is the snippet view's, which scopes every single-object
@@ -484,27 +485,29 @@ class PublicationHistoryTests(TestCase):
         )
         self.sign_in()
 
-        response = self.client.get(
-            reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:edit", args=[theirs.pk])
-        )
+        response = self.client.get(reverse(INSPECT_URL, args=[theirs.pk]))
 
         self.assertEqual(response.status_code, 404)
         self.assertNotContains(response, "not this organisation's failure", status_code=404)
 
-    def test_the_form_for_a_publication_that_does_not_exist_yet_has_no_history(self):
-        """There is no publication to have one, and a reverse relation on an
-        unsaved instance is an exception rather than an empty list."""
+    def test_the_edit_form_carries_no_history(self):
+        """The form is the decisions. An operator who opens it to correct a
+        bbox is not asking what the publication has been doing, and the answer
+        is one click away on the page that exists to give it."""
+        self.record(outcome=FortiPublicationBuildLog.Outcome.FAILURE, error="GridMoved: 1920 points, pinned at 480")
         self.sign_in()
 
-        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"))
+        response = self.client.get(reverse(EDIT_URL, args=[self.publication.pk]))
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "Nothing has been published or pruned yet")
+        self.assertNotContains(response, "GridMoved: 1920 points, pinned at 480")
+        self.assertNotContains(response, "Nothing has been published yet")
 
     def test_rendering_a_publication_does_not_touch_object_storage(self):
         """Every other Forti surface reads the serving plane; this one must not.
-        An edit form behind a storage deadline is a form that hangs for minutes
-        when the bucket does, for an operator who only wanted to change a bbox.
+        A page behind a storage deadline is a page that hangs for minutes when
+        the bucket does, for an operator who only wanted to know whether their
+        model was ready.
         """
         self.record(version=PUBLISHED, step_count=15, point_count=1920, parameter_count=15, objects_written=4)
         self.sign_in()
@@ -522,32 +525,29 @@ class PublicationHistoryTests(TestCase):
 
 
 class PublicationReadinessTests(TestCase):
-    """Readiness beside the form, asserted thinly and once.
+    """Readiness on the inspect page, asserted thinly and once.
 
     Every distinction this section draws belongs to :mod:`~.tests.test_readiness`
     and is tested there, on the data, without rendering anything. What is left
     for this class is the three things only a page can be wrong about: that the
-    section is on the page an operator configures a publication from, that it
+    section is on the page an operator reads a publication from, that it
     carries the module's own words rather than a second set composed in a
-    template, and that it is absent from the add form, where there is no
-    publication to be ready.
+    template, and that it is absent from the form, which is the decisions and
+    not a diagnosis of them.
 
     No sink mixin and no status document, for the reason
     :class:`PublicationHistoryTests` gives: this reads the database and nothing
-    else, and the edit page's one remote-read assertion already covers the whole
-    page it is now part of.
+    else, and the inspect page's one remote-read assertion already covers the
+    whole page it is part of.
     """
 
     def setUp(self):
         dial_org(self.client)
         self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
-        self.url = reverse(
-            "wagtailsnippets_georiva_publisher_forti_fortipublication:edit",
-            args=[self.publication.pk],
-        )
+        self.url = reverse(INSPECT_URL, args=[self.publication.pk])
         self.client.force_login(make_org_admin("org-admin"))
 
-    def test_a_publication_waiting_for_its_first_run_says_so_before_saving(self):
+    def test_a_publication_waiting_for_its_first_run_says_so(self):
         """The state every publication is born in. An operator who reads "not
         ready yet" here waits, which is the correct action and the one no
         surface offered before."""
@@ -555,7 +555,7 @@ class PublicationReadinessTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "not ready yet")
-        self.assertContains(response, "no closed run")
+        self.assertContains(response, "No complete forecast run")
 
     def test_a_blank_slot_reads_as_a_change_rather_than_a_wait(self):
         """The distinction, on the page. Both halves are here at once: the run
@@ -567,12 +567,135 @@ class PublicationReadinessTests(TestCase):
         response = self.client.get(self.url)
 
         self.assertContains(response, "needs a change")
-        self.assertContains(response, "Nothing is mapped to 2t")
+        self.assertContains(response, "2t is not set")
 
-    def test_the_form_for_a_publication_that_does_not_exist_yet_has_no_readiness(self):
-        """There is no publication to be ready, and no collection to be ready
-        *of* — the add form's collection is chosen on the form itself."""
-        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"))
+    def test_the_form_carries_no_readiness(self):
+        """Neither the add form — there is no publication to be ready — nor
+        the edit form, where a verdict above the bbox fields was a diagnosis
+        in the way of a correction."""
+        for url in (
+            reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"),
+            reverse(EDIT_URL, args=[self.publication.pk]),
+        ):
+            response = self.client.get(url)
+
+            self.assertEqual(response.status_code, 200)
+            self.assertNotContains(response, "not ready yet")
+
+
+class InspectPageTests(TestCase):
+    """The publication's home, and the two things it offers to do.
+
+    What is asserted is that the page carries each section in the words its
+    module decided, that the mapping is readable here without being editable,
+    and that the two actions — Mapping and Queue rebuild — are on it for the
+    operator who may change the publication and not for one who may only look.
+    """
+
+    def setUp(self):
+        dial_org(self.client)
+        self.publication = make_publication(
+            make_collection(),
+            slug="ecmwf-ifs",
+            published_version=PUBLISHED,
+            point_count=1920,
+            published_step_count=15,
+            published_parameters=["air_temperature_2m"],
+        )
+        self.url = reverse(INSPECT_URL, args=[self.publication.pk])
+
+    def sign_in(self, user=None):
+        self.client.force_login(user or make_org_admin("org-admin"))
+
+    def test_the_mapping_is_read_here_without_choosers(self):
+        self.publication.variable_mappings.filter(slot="tcc").update(variable=None)
+        self.sign_in()
+
+        response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertNotContains(response, "not ready yet")
+        self.assertContains(response, "<code>2t</code>", html=True)
+        self.assertContains(response, "not set")
+        self.assertNotContains(response, "<select")
+
+    def test_what_was_last_published_is_on_the_page(self):
+        """Fields the form never offered — they are output, not decisions — and
+        that until now no page rendered at all."""
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Published version")
+        self.assertContains(response, str(PUBLISHED))
+        self.assertContains(response, "1920")
+
+    def test_the_consumer_url_is_written_the_way_a_consumer_asks_it(self):
+        self.sign_in()
+
+        self.assertContains(self.client.get(self.url), "/api/forecast/ecmwf-ifs/")
+
+    def test_an_operator_who_may_change_it_is_offered_mapping_and_rebuild(self):
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, reverse("forti_publication_mapping", args=[self.publication.pk]))
+        self.assertContains(response, reverse("forti_publication_queue_rebuild", args=[self.publication.pk]))
+
+    def test_the_listing_offers_mapping_on_every_row(self):
+        self.sign_in()
+
+        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list"))
+
+        self.assertContains(response, reverse("forti_publication_mapping", args=[self.publication.pk]))
+        self.assertContains(response, self.url)
+
+    def test_another_organisations_publication_is_not_inspectable(self):
+        theirs = make_publication(make_collection(slug="gfs-surface", org_slug="other-org"), slug="gfs")
+        self.sign_in()
+
+        self.assertEqual(self.client.get(reverse(INSPECT_URL, args=[theirs.pk])).status_code, 404)
+
+
+class QueueRebuildTests(TestCase):
+    """The one action worth a button, and the three things a button must obey.
+
+    It is a POST, because a GET that changed state is one a link preview could
+    trigger. It is narrowed to the organisation, because every pk-taking page
+    is. And it returns to the inspect page, so the status it flipped is read
+    where it shows.
+    """
+
+    def setUp(self):
+        dial_org(self.client)
+        self.publication = make_publication(make_collection(), slug="ecmwf-ifs")
+        self.url = reverse("forti_publication_queue_rebuild", args=[self.publication.pk])
+        self.client.force_login(make_org_admin("org-admin"))
+
+    def test_a_post_queues_and_returns_to_the_inspect_page(self):
+        FortiPublication.objects.filter(pk=self.publication.pk).update(status=FortiPublication.Status.READY)
+
+        response = self.client.post(self.url)
+
+        self.assertRedirects(response, reverse(INSPECT_URL, args=[self.publication.pk]), fetch_redirect_response=False)
+        self.publication.refresh_from_db()
+        self.assertNotEqual(self.publication.status, FortiPublication.Status.READY)
+
+    def test_a_get_changes_nothing(self):
+        FortiPublication.objects.filter(pk=self.publication.pk).update(status=FortiPublication.Status.READY)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, 405)
+        self.publication.refresh_from_db()
+        self.assertEqual(self.publication.status, FortiPublication.Status.READY)
+
+    def test_another_organisations_publication_cannot_be_queued(self):
+        theirs = make_publication(make_collection(slug="gfs-surface", org_slug="other-org"), slug="gfs")
+        FortiPublication.objects.filter(pk=theirs.pk).update(status=FortiPublication.Status.READY)
+
+        response = self.client.post(reverse("forti_publication_queue_rebuild", args=[theirs.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        theirs.refresh_from_db()
+        self.assertEqual(theirs.status, FortiPublication.Status.READY)

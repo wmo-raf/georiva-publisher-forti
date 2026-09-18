@@ -181,7 +181,7 @@ class ReadinessTests(TestCase):
         steps = self.finding(readiness.report(self.publication), "steps")
 
         self.assertEqual(steps.state, readiness.WAITING)
-        self.assertIn("window", steps.detail)
+        self.assertIn("too close together", steps.detail)
 
     def test_a_run_no_slot_shares_a_step_with_waits(self):
         """Variables of one run ingest independently, so a run whose slots have

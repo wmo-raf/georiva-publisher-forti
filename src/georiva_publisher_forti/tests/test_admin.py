@@ -14,7 +14,7 @@ collection *is* narrowed out of the queryset, and has to be turned away as absen
 rather than explained — a caller must not learn from a refusal that the row
 exists and is a perfectly good forecast belonging to somebody else.
 
-**The mapping editor** is the same distinction drawn three ways instead of two,
+**The mapping page** is the same distinction drawn three ways instead of two,
 because the eight slots admit of three answers rather than two. A unit that
 disagrees is **refused**, and the refusal names the parameters that would have
 carried the wrong number. A mapping that is merely suspicious — one variable in
@@ -42,8 +42,27 @@ from .factories import make_collection, make_publication, make_user
 
 ADD_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:add"
 EDIT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:edit"
+INSPECT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:inspect"
+MAPPING_URL = "forti_publication_mapping"
 
 EXTENT = {"west": 32.0, "south": 4.0, "east": 33.25, "north": 5.25}
+
+
+def publication_payload(collection, slug="posted", **overrides):
+    """The whole publication form, as a browser posts it.
+
+    One place rather than three, so a field the form grows is added here once
+    and every test that posts the form keeps posting a whole one.
+    """
+    return {
+        "collection": getattr(collection, "pk", collection),
+        "slug": slug,
+        "visibility": "public",
+        "is_enabled": "on",
+        "generation": 0,
+        **EXTENT,
+        **overrides,
+    }
 
 
 class CollectionChooserTests(TestCase):
@@ -84,10 +103,7 @@ class PostedCollectionTests(TestCase):
         self.client.force_login(make_user("poster", superuser=True))
 
     def post(self, collection):
-        return self.client.post(
-            reverse(ADD_URL),
-            {"collection": collection.pk, "slug": "posted", "visibility": "public", "is_enabled": "on", **EXTENT},
-        )
+        return self.client.post(reverse(ADD_URL), publication_payload(collection))
 
     def test_a_posted_non_forecast_id_is_refused_in_terms_of_the_setting(self):
         response = self.post(make_collection(slug="rainfall", is_forecast=False))
@@ -111,9 +127,9 @@ class PostedCollectionTests(TestCase):
 class MappingEditorMixin:
     """One publication, already seeded by auto-match, and a way to re-post it.
 
-    Every test below edits a publication rather than creating one, because the
-    mapping is only editable once there is a collection to draw variables from —
-    which is the whole reason the section is absent from the add form.
+    Every test below posts to the mapping page of a publication that exists,
+    because the mapping is only editable once there is a collection to draw
+    variables from — which is the whole reason the page is its own.
     """
 
     def setUp(self):
@@ -121,27 +137,20 @@ class MappingEditorMixin:
         self.client.force_login(make_user("mapper", superuser=True))
         self.collection = make_collection()
         self.publication = make_publication(self.collection)
-        self.url = reverse(EDIT_URL, args=[self.publication.pk])
+        self.url = reverse(MAPPING_URL, args=[self.publication.pk])
 
     def variable(self, slug):
         return self.collection.variables.get(slug=slug)
 
     def payload(self, acknowledge=False, **overrides):
-        """The whole form, with the mapping as it currently stands.
+        """The whole mapping as it currently stands.
 
         Whole rather than partial because that is what a browser posts, and the
         thing most easily got wrong here — a generation raised eight times by a
         submit that changed nothing — is only visible when every row is present.
         """
         mapped = self.publication.mapped_variables()
-        body = {
-            "collection": self.publication.collection_id,
-            "slug": self.publication.slug,
-            "visibility": self.publication.visibility,
-            "is_enabled": "on",
-            "generation": self.publication.generation,
-            **EXTENT,
-        }
+        body = {}
         for key, variable in mapped.items():
             body[forms.field_name(key)] = variable.pk if variable else ""
         if acknowledge:
@@ -202,13 +211,30 @@ class MappingRenderTests(MappingEditorMixin, TestCase):
     def test_a_fully_mapped_publication_is_not_shown_as_incomplete(self):
         self.assertNotContains(self.client.get(self.url), forms.INCOMPLETE_LABEL)
 
-    def test_the_add_form_has_no_mapping(self):
-        """There is no collection yet, so there are no variables to choose
-        between; creation seeds the eight rows by auto-match and the operator
-        edits them afterwards."""
-        form = self.client.get(reverse(ADD_URL)).context["form"]
+    def test_the_publication_form_has_no_mapping(self):
+        """Neither on add — there is no collection yet — nor on edit, where the
+        eight slots would be a diagnosis in the way of a bbox correction. The
+        mapping is a page of its own, and the form is the decisions."""
+        for url in (reverse(ADD_URL), reverse(EDIT_URL, args=[self.publication.pk])):
+            form = self.client.get(url).context["form"]
 
-        self.assertEqual([name for name in form.fields if name.startswith(forms.SLOT_FIELD_PREFIX)], [])
+            self.assertEqual([name for name in form.fields if name.startswith(forms.SLOT_FIELD_PREFIX)], [])
+
+    def test_saving_the_mapping_returns_to_the_inspect_page(self):
+        """Every path into this page ends with the same question — is it ready
+        now? — and the inspect page's readiness is the answer."""
+        response = self.post()
+
+        self.assertRedirects(
+            response,
+            reverse(INSPECT_URL, args=[self.publication.pk]),
+            fetch_redirect_response=False,
+        )
+
+    def test_another_organisations_mapping_is_not_reachable(self):
+        theirs = make_publication(make_collection(slug="gfs-surface", org_slug="other-org"), slug="gfs")
+
+        self.assertEqual(self.client.get(reverse(MAPPING_URL, args=[theirs.pk])).status_code, 404)
 
 
 class WhatTheFormAdmitsTests(MappingEditorMixin, TestCase):
@@ -234,7 +260,7 @@ class WhatTheFormAdmitsTests(MappingEditorMixin, TestCase):
     def test_it_names_the_confusion_no_check_can_catch(self):
         """Dew point in the air-temperature slot, by name. A page that said only
         "some checks are not made" would be true and useless."""
-        self.assertContains(self.client.get(self.url), "Dew point mapped into the")
+        self.assertContains(self.client.get(self.url), "Dew point in the")
 
 
 class UnitRefusalTests(MappingEditorMixin, TestCase):
@@ -362,14 +388,14 @@ class WarningTests(MappingEditorMixin, TestCase):
 
     def test_a_range_retuned_under_a_saved_mapping_warns_without_blocking(self):
         """The mapping did not move — somebody restyled the variable it names.
-        The page has to say so, and has no business stopping an edit to the
-        extent over a change the operator being stopped did not make."""
+        The page has to say so, and has no business stopping a submit that
+        changed nothing over a change the operator being stopped did not make."""
         variable = self.variable("2t")
         variable.value_min, variable.value_max = 200.0, 320.0
         variable.save(update_fields=["value_min", "value_max"])
 
         self.assertEqual(self.post().status_code, 302)
-        self.assertContains(self.client.get(self.url), "styling hint")
+        self.assertContains(self.client.get(self.url), "different unit")
 
     def test_an_ordinary_mapping_needs_no_acknowledgement(self):
         """The acknowledgement is not a box on every save — a page that asked
@@ -378,16 +404,14 @@ class WarningTests(MappingEditorMixin, TestCase):
 
     def test_living_with_a_warning_is_not_re_asked_at_every_save(self):
         """A publication that has been deliberately mapped into a warned state
-        is edited afterwards for other reasons — the extent corrected, the
-        visibility narrowed. Asking again at each of those is how a rare box
-        becomes furniture."""
+        is re-submitted unchanged afterwards — the page opened, read, saved.
+        Asking again at each of those is how a rare box becomes furniture."""
         self.remap("2d", self.variable("2t"), acknowledge=True)
 
-        response = self.post(north=6.0)
+        response = self.post()
 
         self.assertEqual(response.status_code, 302)
-        self.publication.refresh_from_db()
-        self.assertEqual(self.publication.north, 6.0)
+        self.assertEqual(self.stored("2d"), self.variable("2t"))
 
     def test_the_warning_is_still_shown_on_that_save(self):
         """Shown either way; what is conditional is being stopped by it. A
@@ -461,8 +485,17 @@ class CollectionChangeTests(MappingEditorMixin, TestCase):
     The eight rows name variables of one collection and the model refuses a
     variable from another, so a publication re-pointed at a second collection
     holds eight rows that cannot be saved and cannot be published — a state
-    reachable before this editor existed and invisible until the next run.
+    reachable before the mapping was editable and invisible until the next run.
+
+    This is the publication form's rule, not the mapping page's: only the form
+    has both facts in hand — the collection being chosen and the slots already
+    filled from the one it has.
     """
+
+    def post(self, **overrides):
+        collection = overrides.pop("collection", self.collection)
+        body = publication_payload(collection, slug=self.publication.slug, **overrides)
+        return self.client.post(reverse(EDIT_URL, args=[self.publication.pk]), body)
 
     def test_repointing_a_filled_publication_is_refused(self):
         elsewhere = make_collection(slug="other-surface")
@@ -485,3 +518,73 @@ class CollectionChangeTests(MappingEditorMixin, TestCase):
         self.assertEqual(response.status_code, 302)
         self.publication.refresh_from_db()
         self.assertEqual(self.publication.collection, elsewhere)
+
+
+class WhereASaveLandsTests(TestCase):
+    """Three saves, three destinations, one rule: the operator is taken to the
+    page that shows the consequence of what they just did.
+
+    A creation has just seeded eight rows by auto-match, and whether it found
+    eight or five is a thing only the operator can judge — so it lands on the
+    mapping page. An edit and a mapping save both land on the inspect page,
+    whose readiness is the answer to the question every save ends with.
+    """
+
+    def setUp(self):
+        dial_org(self.client)
+        self.client.force_login(make_user("saver", superuser=True))
+        self.collection = make_collection()
+
+    def test_creating_a_publication_lands_on_its_mapping_page(self):
+        response = self.client.post(reverse(ADD_URL), publication_payload(self.collection, slug="kenya"))
+
+        publication = FortiPublication.objects.get(slug="kenya")
+        self.assertRedirects(response, reverse(MAPPING_URL, args=[publication.pk]), fetch_redirect_response=False)
+
+    def test_editing_a_publication_lands_on_its_inspect_page(self):
+        publication = make_publication(self.collection)
+
+        response = self.client.post(
+            reverse(EDIT_URL, args=[publication.pk]),
+            publication_payload(self.collection, slug=publication.slug, north=6.0),
+        )
+
+        self.assertRedirects(response, reverse(INSPECT_URL, args=[publication.pk]), fetch_redirect_response=False)
+
+
+class MenuTests(TestCase):
+    """Reached from core's Publications group, and from nowhere else.
+
+    Core strips the Snippets menu, so a snippet with no menu hook of its own is
+    a page nothing links to — which is what this publication was. The entry is
+    "Forti", under a heading already called Publications; the page keeps the
+    longer name, which it carries without a parent.
+    """
+
+    def _request(self):
+        from django.test import RequestFactory
+
+        request = RequestFactory().get("/admin/")
+        request.user = make_user("menu-reader", superuser=True)
+        return request
+
+    def test_forti_is_registered_into_the_publications_group(self):
+        from wagtail import hooks
+
+        from georiva.core.menus import PUBLICATIONS_MENU_HOOK
+
+        items = [fn() for fn in hooks.get_hooks(PUBLICATIONS_MENU_HOOK)]
+        forti = next((item for item in items if str(item.label) == "Forti"), None)
+
+        self.assertIsNotNone(forti)
+        self.assertEqual(forti.url, reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:list"))
+
+    def test_the_child_is_forti_and_not_the_page_heading(self):
+        """The group's presence and place are core's tests; what is this
+        plugin's is the one word it puts there."""
+        from georiva.core.menus import publications_menu
+
+        children = [str(i.label) for i in publications_menu.menu_items_for_request(self._request())]
+
+        self.assertIn("Forti", children)
+        self.assertNotIn("Forti publications", children)

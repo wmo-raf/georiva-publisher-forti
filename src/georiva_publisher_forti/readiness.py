@@ -112,7 +112,7 @@ SEVERITY = (BLOCKED, WAITING, UNANSWERABLE, PARTIAL, READY)
 #: vocabulary above is for the code that compares them.
 STATE_LABELS = {
     READY: "ready",
-    PARTIAL: "still ingesting",
+    PARTIAL: "still arriving",
     WAITING: "not ready yet",
     BLOCKED: "needs a change",
     UNANSWERABLE: "cannot say yet",
@@ -140,19 +140,11 @@ STATE_CLASSES = {
 #: change" are read as the same bad news by somebody who has not yet found the
 #: row that differs.
 VERDICTS = {
-    READY: "The latest closed run would publish now.",
-    PARTIAL: (
-        "This publishes now, and the latest run is still ingesting — it would carry fewer "
-        "steps than it will once the rest of its files land."
-    ),
-    WAITING: (
-        "Nothing here is misconfigured. This publication is waiting for data, and the next "
-        "run to close is what changes that."
-    ),
-    BLOCKED: (
-        "This will not publish until something below is changed. Waiting does not fix any of the rows marked so."
-    ),
-    UNANSWERABLE: "Not enough is settled yet to say what a publish would do.",
+    READY: "The latest forecast run is ready to publish.",
+    PARTIAL: "Ready to publish. The latest run is still arriving, so more steps will follow.",
+    WAITING: "Nothing needs changing. Waiting for the next forecast run to arrive.",
+    BLOCKED: "Something below needs a change before this can publish. Waiting will not fix it.",
+    UNANSWERABLE: "Cannot say yet — see the rows above.",
 }
 
 
@@ -161,12 +153,12 @@ VERDICTS = {
 #: a pair of arguments at each construction, so that the key a test asks for and
 #: the subject a reader sees cannot come apart.
 SUBJECTS = {
-    "forecast": "Forecast collection",
-    "visibility": "Collection visibility",
-    "runs": "Closed runs",
-    "slots": "Slot coverage",
-    "units": "Units",
-    "steps": "Steps the latest run would publish",
+    "forecast": "Is a forecast collection",
+    "visibility": "Collection is public",
+    "runs": "Forecast runs received",
+    "slots": "Variables set",
+    "units": "Units match",
+    "steps": "Steps ready to publish",
 }
 
 
@@ -230,8 +222,8 @@ def report(publication) -> Readiness:
     """What a publish of this publication would meet, in the order it meets it.
 
     Every figure is read from the database. The publication must have a
-    collection — the panel that renders this is hidden on the add form, where
-    there is neither.
+    collection — the inspect page that renders this only exists for a saved
+    publication, which always has one.
     """
     collection = publication.collection
     run = RunIngestion.latest_closed(collection)
@@ -323,11 +315,7 @@ def _runs(collection, run) -> Finding:
             key="runs",
             state=WAITING,
             answer="none yet",
-            detail=(
-                f"{collection.slug} has no closed run. A run closes when its arrival route says "
-                f"the last file landed, and a publication configured ahead of its first "
-                f"ingestion is an ordinary thing to have — this resolves itself."
-            ),
+            detail=f"No complete forecast run of {collection.slug} has arrived yet. This resolves itself.",
         )
     return Finding(
         key="runs",
@@ -391,7 +379,7 @@ def _units(mapped: dict) -> Finding:
             key="units",
             state=UNANSWERABLE,
             answer="nothing to compare",
-            detail="No slot names a variable yet, so there is no unit to compare with the slot's.",
+            detail="No variables are set yet.",
         )
 
     wrong = []
@@ -399,17 +387,14 @@ def _units(mapped: dict) -> Finding:
         want = params.BY_SLOT[key].units
         have = symbol_of(variable)
         if not same_unit(have, want):
-            wrong.append(f"{key} ← {variable.slug} is {have!r}, expected {want!r}")
+            wrong.append(f"{variable.slug} is in {have}, but {key} must be in {want}")
 
     if wrong:
         return Finding(
             key="units",
             state=BLOCKED,
             answer=f"{len(wrong)} disagree",
-            detail=(
-                "Forti reads units from meta.json without converting, so this would publish a "
-                "wrong number under a right-looking label: " + "; ".join(wrong) + "."
-            ),
+            detail="Units are not converted, so the numbers would be wrong: " + "; ".join(wrong) + ".",
         )
     return Finding(key="units", state=READY, answer=f"{len(filled)} agree")
 
@@ -437,17 +422,14 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             key="steps",
             state=UNANSWERABLE,
             answer="not until the rows above",
-            detail=(
-                "A publish is refused before it counts a step while anything above needs a "
-                "change, so what it would publish cannot be said yet."
-            ),
+            detail="Fix the rows above first.",
         )
     if run is None:
         return Finding(
             key="steps",
             state=UNANSWERABLE,
             answer="no run to count",
-            detail="There is no closed run yet, so there is no step list to intersect.",
+            detail="No forecast run has arrived yet.",
         )
 
     hrefs = planner.cog_hrefs(collection, run.reference_time, mapped)
@@ -459,21 +441,17 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             key="steps",
             state=WAITING,
             answer="none yet",
-            detail=(
-                f"No timestep of {when} has a COG for every slot. Variables of one run ingest "
-                f"independently, so this resolves itself as they land."
-            ),
+            detail=f"No step of the {when} run has data for every variable yet. This resolves itself as data arrives.",
         )
 
     if not planner.spans_a_period(publishable(shared, params.ALL_PARAMETERS)):
         return Finding(
             key="steps",
             state=WAITING,
-            answer=f"{len(shared)}, spanning no window",
+            answer=f"{len(shared)}, too close together",
             detail=(
-                f"{when} has {len(shared)} shared step(s) and no two of them are a period window "
-                f"apart, so there would be no precipitation and no symbol. Instant values alone "
-                f"are not a forecast, and a run with more steps in it spans one."
+                f"The {when} run has {len(shared)} step(s) so far, too close together to cover a "
+                f"period — there would be no rainfall and no weather symbols yet. More steps will fix it."
             ),
         )
 
@@ -485,9 +463,8 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             state=PARTIAL,
             answer=f"{len(shared)} of {reached}",
             detail=(
-                f"{listed(behind)} has fewer steps of {when} than the rest, so a publish now "
-                f"carries {len(shared)} of the {reached} steps the run has reached. Nothing needs "
-                f"doing: the stragglers land and the next publish carries them."
+                f"{listed(behind)} has fewer steps of the {when} run than the other variables, so "
+                f"a publish now would carry {len(shared)} of {reached} steps. Nothing needs doing."
             ),
         )
 
@@ -498,12 +475,8 @@ def _slot_detail(collection, blank: list, foreign: list) -> str:
     said = []
     if blank:
         said.append(
-            f"Nothing is mapped to {listed(blank)}. Every slot has to name a variable of "
-            f"{collection.slug} before this can publish — fill the blank rows in below."
+            f"{listed(blank)} is not set. Every Forti parameter needs a variable — set it on the Variables page."
         )
     if foreign:
-        said.append(
-            f"{listed(foreign)} names a variable outside {collection.slug}, which has no asset at "
-            f"any timestep of this collection's runs."
-        )
+        said.append(f"{listed(foreign)} uses a variable from a different collection than {collection.slug}.")
     return " ".join(said)

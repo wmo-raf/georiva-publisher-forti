@@ -1,0 +1,57 @@
+{% extends "wagtailadmin/generic/base.html" %}
+{% load i18n wagtailadmin_tags %}
+{% comment %}
+    The eight slots of one publication, on a page of their own.
+
+    The table, the warnings and the statement of what was checked are the
+    fragment `panels/variable_mapping.html`, which is where every word of them
+    was already decided. This page is what wraps that fragment in a form: the
+    token, the errors that belong to no slot, and the one button.
+
+    Saving returns to the inspect page — see `wagtail_hooks.mapping_page`.
+{% endcomment %}
+
+{% block titletag %}{% blocktrans trimmed with slug=publication.slug %}Variables — {{ slug }}{% endblocktrans %}{% endblock %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .fmp-errors {
+            margin: 0 0 1.2em;
+            padding: 0.9em 1em;
+            border-left: 3px solid var(--w-color-critical-200);
+            color: var(--w-color-critical-200);
+            max-width: 48em;
+        }
+
+        .fmp-actions {
+            margin-top: 1.6em;
+            display: flex;
+            gap: 0.6em;
+            align-items: center;
+        }
+    </style>
+{% endblock %}
+
+{% block main_content %}
+    <form method="post" action="" novalidate>
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+            <div class="fmp-errors">
+                {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+            </div>
+        {% endif %}
+
+        {% include "georiva_publisher_forti/panels/variable_mapping.html" %}
+
+        <div class="fmp-actions">
+            <button type="submit" class="button action-save button-longrunning" data-controller="w-progress" data-action="w-progress#activate">
+                {% icon name="spinner" %}<em data-w-progress-target="label">{% trans "Save" %}</em>
+            </button>
+            <a class="button button-secondary" href="{% url 'wagtailsnippets_georiva_publisher_forti_fortipublication:inspect' publication.pk %}">
+                {% trans "Cancel" %}
+            </a>
+        </div>
+    </form>
+{% endblock %}

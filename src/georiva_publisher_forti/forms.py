@@ -1,8 +1,16 @@
-"""The publication form, and the eight slots it grew.
+"""The two forms a publication is configured through.
 
-The mapping has been data since #12 and editable only from a shell. What this
-adds is the surface, and the surface is where the feature's one real difficulty
-lives: **three answers, not two.**
+:class:`FortiPublicationForm` is the snippet's own: which collection, what the
+model is called, who may ask for it, how far it reaches. :class:`VariableMappingForm`
+is the eight slots, on a page of their own. They were one form once, and the split
+is the reason there are two: the slots choose between the variables of *this
+publication's* collection, and a form that is also choosing the collection is
+asking a question it cannot yet answer. On its own page the collection is already
+known, so the page is the mapping and nothing else.
+
+The mapping has been data since #12 and editable only from a shell. The form is
+the surface, and the surface is where the feature's one real difficulty lives:
+**three answers, not two.**
 
 A unit that disagrees with its slot is **refused**, because Forti copies units
 out of ``meta.json`` without interpreting them and the number published would be
@@ -29,15 +37,13 @@ slot key is also not a Python identifier — ``2t`` — so the names have to be
 derived anyway. :func:`field_name` is that derivation, and the class is assembled
 with the fields it produces.
 
-## Why there is no mapping on the add form
+## Why creating a publication asks for no mapping
 
-A slot chooses between the variables of *this publication's* collection, and on
-the add form there is no collection yet. What happens instead is what happened
-before this form existed: :meth:`~.models.FortiPublication.seed_mapping` fills
-all eight rows by slug auto-match at creation, and the operator edits them
-afterwards. So the common case still asks for no decisions at all, and the case
-auto-match cannot answer is answered on the page that knows which collection it
-is asking about.
+:meth:`~.models.FortiPublication.seed_mapping` fills all eight rows by slug
+auto-match at creation, and the operator is taken to the mapping page to read
+what it found. So the common case still asks for no decisions at all, and the
+case auto-match cannot answer is answered on the page that knows which
+collection it is asking about.
 """
 
 from dataclasses import dataclass
@@ -53,7 +59,7 @@ from . import parameters as params
 from .models import FortiVariableMapping
 
 #: Prefix distinguishing a slot's field from every other field on the form. Not
-#: cosmetic: it is what lets the panel, the tests and :func:`field_name` agree on
+#: cosmetic: it is what lets the page, the tests and :func:`field_name` agree on
 #: which fields are the mapping without enumerating them.
 SLOT_FIELD_PREFIX = "slot_"
 
@@ -67,49 +73,37 @@ ACKNOWLEDGE_FIELD = "acknowledge_mapping_concerns"
 #: a publication may be configured while its collection is still declaring its
 #: variables — so this reads as unfinished rather than as broken, which is also
 #: how the planner treats it.
-INCOMPLETE_LABEL = "no variable yet"
+INCOMPLETE_LABEL = "not set"
 
 #: What the chooser's own blank option says. Explicit rather than Django's row
 #: of dashes, because leaving a slot blank is a thing an operator may mean.
-EMPTY_LABEL = "— not mapped —"
+EMPTY_LABEL = "— none —"
 
-ACKNOWLEDGEMENT_LABEL = "I have read the warnings above and mean this mapping."
+ACKNOWLEDGEMENT_LABEL = "I have read the warnings above and want to save this anyway."
 
-ACKNOWLEDGEMENT_REQUIRED = (
-    "You are changing this mapping into one that is unusual rather than wrong, so nothing here "
-    "will stop you — but it has to be a decision rather than an oversight. Read the warnings "
-    "above and tick the box, or change the slots they are about."
-)
+ACKNOWLEDGEMENT_REQUIRED = "There are warnings above. Tick the box to save anyway, or change the variables."
 
 COLLECTION_IS_MAPPED = (
-    "This publication already maps {filled} of the {total} slots to variables of {collection!r}, "
-    "and a slot may only be filled from its own publication's collection. Moving the publication "
-    "would leave every one of those rows naming a variable this publication can no longer read, "
-    "which is a state nothing refuses and nothing publishes. Clear the mapping first, or make a "
-    "second publication of the other collection."
+    "This publication already has {filled} of {total} variables set from {collection!r}. "
+    "Clear them first, or create a new publication for the other collection."
 )
 
 #: What the form is entitled to say it did. Rendered on the page rather than
 #: merely being true of the code, because the page is where somebody decides
 #: how much the saved mapping is worth.
 CHECKS_MADE = (
-    "Each variable carries the unit its slot publishes, compared through pint so that °C and "
-    "degC agree and kelvin does not. A disagreement is refused outright.",
-    "No variable fills two slots, and no declared range sits entirely outside the values its "
-    "slot publishes. Either one warns, and saves once acknowledged.",
+    "The unit of the variable matches the unit of the Forti parameter.",
+    "No variable is used twice.",
+    "The value range of the variable looks plausible for the parameter.",
 )
 
 #: What it did not, which is the more important half. Ordered as an argument
 #: rather than as a list: the specific gap, then its scope, then what follows
 #: for the operator reading a saved mapping.
 CHECKS_NOT_MADE = (
-    "Whether a variable is the quantity its slot names. Dew point mapped into the "
-    "air-temperature slot is degrees celsius into degrees celsius: every check above passes, "
-    "every layer downstream agrees, and the forecast served is wrong. Nothing in GeoRiva will "
-    "catch it.",
-    "Whether the numbers are right. Nothing on this page reads a raster — the checks above are "
-    "made against what the collection declares about itself.",
-    "So a saved mapping is one you have asserted. It is not one that has been verified.",
+    "Whether the variable really is the quantity the Forti parameter expects. Dew point in the "
+    "temperature field passes every check above and publishes a wrong forecast.",
+    "Please check each row yourself.",
 )
 
 
@@ -140,7 +134,8 @@ class SlotChoiceField(forms.ModelChoiceField):
 
 @dataclass(frozen=True)
 class Row:
-    """One slot as the panel renders it: the role, the chooser, and the doubts."""
+    """One Forti parameter as the mapping page renders it: the role, the
+    chooser, and the doubts."""
 
     slot: params.Slot
     field: forms.BoundField
@@ -151,158 +146,43 @@ class Row:
         return not self.field.value()
 
 
-class VariableMappingMixin:
-    """The eight slots, on the form that already decides everything else.
+@dataclass(frozen=True)
+class Summary:
+    """One Forti parameter as the inspect page reads it: the role and what
+    fills it, with no chooser and no doubts — those are the mapping page's."""
 
-    On the form rather than in a formset because the slot set is *fixed*: there
-    is nothing to add and nothing to remove, and a formset would offer both. The
-    fields themselves are attached by :func:`_mapping_fields` at the bottom of
-    this module, where the vocabulary can be read.
+    slot: params.Slot
+    variable: object
+
+    @property
+    def feeds(self) -> str:
+        return ", ".join(self.slot.feeds)
+
+
+def mapping_summary(publication) -> tuple[Summary, ...]:
+    """Every Forti parameter and what fills it, for reading rather than changing.
+
+    The read-only twin of :meth:`VariableMappingFormBase.mapping_rows`, kept
+    beside it so the two surfaces cannot drift in what they call a row.
     """
+    mapped = publication.mapped_variables()
+    return tuple(Summary(slot=slot, variable=mapped.get(slot.key)) for slot in params.SLOTS)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._concerns = None
-        #: Whether this submit moves a slot. False until :meth:`clean` says
-        #: otherwise, which is also the right answer for a form nobody has
-        #: submitted: reading a warned mapping is not changing it.
-        self._remapping = False
 
-        if not self.has_mapping:
-            # The add form. Removed rather than left empty: a chooser with no
-            # collection behind it offers nothing, and a required-looking row of
-            # eight blanks would read as eight decisions somebody skipped.
-            for name in self.mapping_field_names():
-                del self.fields[name]
-            return
+class FortiPublicationForm(WagtailAdminModelForm):
+    """The snippet's own form: the decisions, and one refusal about them.
 
-        variables = self.instance.collection.variables.order_by("slug")
-        stored = self.instance.mapped_variables()
-        for slot in params.SLOTS:
-            field = self.fields[field_name(slot.key)]
-            # The collection's own variables and no others, which is also the
-            # model's refusal: a publication reads the COGs of its own
-            # collection, so a variable from another has no asset at any step.
-            field.queryset = variables
-            # Rendered by the panel as the row's "Published as" cell, under the
-            # id Django's ``aria-describedby`` points at. Set here rather than
-            # written into the template so the description a screen reader is
-            # given and the one the page shows cannot become two different
-            # sentences.
-            field.help_text = ", ".join(slot.feeds)
-            variable = stored.get(slot.key)
-            self.initial[field_name(slot.key)] = variable.pk if variable else None
-
-    # -- what the panel reads ------------------------------------------------
-
-    @property
-    def has_mapping(self) -> bool:
-        """Whether this form is editing a mapping at all — see the module
-        docstring on why the add form is not."""
-        return bool(self.instance and self.instance.pk and self.instance.collection_id)
-
-    def mapping_field_names(self) -> list[str]:
-        return [field_name(slot.key) for slot in params.SLOTS] + [ACKNOWLEDGE_FIELD]
-
-    def mapping_rows(self) -> tuple[Row, ...]:
-        """Every slot, in vocabulary order, with whatever is said about it.
-
-        Assembled here rather than in the template for the reason every other
-        surface in this plugin gives: a distinction drawn inside ``{% if %}`` is
-        a distinction nobody tests.
-        """
-        if not self.has_mapping:
-            return ()
-        raised = self.mapping_concerns()
-        return tuple(
-            Row(
-                slot=slot,
-                field=self[field_name(slot.key)],
-                concerns=tuple(concern for concern in raised if concern.slot == slot.key),
-            )
-            for slot in params.SLOTS
-        )
-
-    def mapping_concerns(self) -> tuple[mapping.Concern, ...]:
-        """The warnings about the mapping as it currently stands.
-
-        On a bound form that is the *posted* mapping, worked out during
-        :meth:`clean` and kept — so the page an operator reads back warns about
-        what they submitted rather than about what is still stored.
-        """
-        if self._concerns is None:
-            self._concerns = mapping.concerns(self.instance.mapped_variables())
-        return self._concerns
-
-    @property
-    def acknowledgement(self):
-        """The tick-box, when there is something to tick it for.
-
-        Two conditions, and the second is what keeps the first worth reading.
-        There must be a warning — and this submit must be *making* the mapping
-        it warns about. A publication that lives with a standing warning is
-        edited for other reasons: its extent is corrected, its slug is read, its
-        visibility is narrowed. Demanding the box on every one of those turns it
-        into furniture, ticked without being read, which is the whole of what it
-        was supposed not to be.
-
-        The warning itself is shown either way. What is conditional is being
-        stopped by it.
-        """
-        if not self.has_mapping or not self.mapping_concerns() or not self._remapping:
-            return None
-        return self[ACKNOWLEDGE_FIELD]
-
-    # -- validation ----------------------------------------------------------
+    Nothing about the mapping is on it any more except the one rule that only
+    this form can enforce, because only this form has both facts in hand at
+    once: which collection the publication is being pointed at, and how many
+    slots are already filled from the one it has.
+    """
 
     def clean(self):
         cleaned = super().clean()
-        if not self.has_mapping:
-            return cleaned
-
-        self._refuse_stranding_the_mapping(cleaned)
-
-        posted = {}
-        for slot in params.SLOTS:
-            name = field_name(slot.key)
-            variable = cleaned.get(name)
-            if variable is not None and not self._slot_accepts(slot.key, variable, name):
-                variable = None
-            posted[slot.key] = variable
-
-        self._concerns = mapping.concerns(posted)
-        self._remapping = self._moves_a_slot(posted)
-        if self.acknowledgement is not None and not cleaned.get(ACKNOWLEDGE_FIELD):
-            self.add_error(ACKNOWLEDGE_FIELD, ACKNOWLEDGEMENT_REQUIRED)
-
+        if self.instance and self.instance.pk:
+            self._refuse_stranding_the_mapping(cleaned)
         return cleaned
-
-    def _moves_a_slot(self, posted: dict) -> bool:
-        """Whether this submit changes what fills any slot.
-
-        Compared against what the publication currently holds rather than
-        against the form's ``initial``, which is the same thing on the first
-        render and is stale by exactly one edit after a concurrent one.
-        """
-        stored = self.instance.mapped_variables()
-        return any(_pk(posted.get(key)) != _pk(stored.get(key)) for key in params.SLOT_KEYS)
-
-    def _slot_accepts(self, slot_key: str, variable, name: str) -> bool:
-        """Whether the model would take this variable in this slot.
-
-        Asked *of the model*, by building the row and cleaning it, rather than
-        by repeating its two conditions here. There is one unit refusal in this
-        plugin and one sentence explaining it, and a form that composed its own
-        would be the second — free to drift from the one the shell, the planner
-        and any later API all still read.
-        """
-        row = FortiVariableMapping(publication=self.instance, slot=slot_key, variable=variable)
-        try:
-            row.clean()
-        except ValidationError as refusal:
-            self.add_error(name, refusal.messages)
-            return False
-        return True
 
     def _refuse_stranding_the_mapping(self, cleaned) -> None:
         """A filled mapping does not follow its publication to another collection.
@@ -336,31 +216,156 @@ class VariableMappingMixin:
                 ),
             )
 
+
+class VariableMappingFormBase(forms.Form):
+    """The eight slots of one publication, and nothing else.
+
+    A plain form over a publication rather than a model form: what it writes
+    is the related rows, and the publication itself is only read. On a form
+    rather than in a formset because the slot set is *fixed* — there is nothing
+    to add and nothing to remove, and a formset would offer both. The fields
+    themselves are attached by :func:`_mapping_fields` at the bottom of this
+    module, where the vocabulary can be read.
+    """
+
+    def __init__(self, publication, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.publication = publication
+        self._concerns = None
+        #: Whether this submit moves a slot. False until :meth:`clean` says
+        #: otherwise, which is also the right answer for a form nobody has
+        #: submitted: reading a warned mapping is not changing it.
+        self._remapping = False
+
+        variables = publication.collection.variables.order_by("slug")
+        stored = publication.mapped_variables()
+        for slot in params.SLOTS:
+            field = self.fields[field_name(slot.key)]
+            # The collection's own variables and no others, which is also the
+            # model's refusal: a publication reads the COGs of its own
+            # collection, so a variable from another has no asset at any step.
+            field.queryset = variables
+            # Rendered by the page as the row's "Published as" cell, under the
+            # id Django's ``aria-describedby`` points at. Set here rather than
+            # written into the template so the description a screen reader is
+            # given and the one the page shows cannot become two different
+            # sentences.
+            field.help_text = ", ".join(slot.feeds)
+            variable = stored.get(slot.key)
+            self.initial[field_name(slot.key)] = variable.pk if variable else None
+
+    # -- what the page reads -------------------------------------------------
+
+    @staticmethod
+    def mapping_field_names() -> list[str]:
+        return [field_name(slot.key) for slot in params.SLOTS] + [ACKNOWLEDGE_FIELD]
+
+    def mapping_rows(self) -> tuple[Row, ...]:
+        """Every slot, in vocabulary order, with whatever is said about it.
+
+        Assembled here rather than in the template for the reason every other
+        surface in this plugin gives: a distinction drawn inside ``{% if %}`` is
+        a distinction nobody tests.
+        """
+        raised = self.mapping_concerns()
+        return tuple(
+            Row(
+                slot=slot,
+                field=self[field_name(slot.key)],
+                concerns=tuple(concern for concern in raised if concern.slot == slot.key),
+            )
+            for slot in params.SLOTS
+        )
+
+    def mapping_concerns(self) -> tuple[mapping.Concern, ...]:
+        """The warnings about the mapping as it currently stands.
+
+        On a bound form that is the *posted* mapping, worked out during
+        :meth:`clean` and kept — so the page an operator reads back warns about
+        what they submitted rather than about what is still stored.
+        """
+        if self._concerns is None:
+            self._concerns = mapping.concerns(self.publication.mapped_variables())
+        return self._concerns
+
+    @property
+    def acknowledgement(self):
+        """The tick-box, when there is something to tick it for.
+
+        Two conditions, and the second is what keeps the first worth reading.
+        There must be a warning — and this submit must be *making* the mapping
+        it warns about. A page opened to read a standing warning is not a page
+        changing it, and demanding the box on every visit turns it into
+        furniture, ticked without being read, which is the whole of what it was
+        supposed not to be.
+
+        The warning itself is shown either way. What is conditional is being
+        stopped by it.
+        """
+        if not self.mapping_concerns() or not self._remapping:
+            return None
+        return self[ACKNOWLEDGE_FIELD]
+
+    # -- validation ----------------------------------------------------------
+
+    def clean(self):
+        cleaned = super().clean()
+
+        posted = {}
+        for slot in params.SLOTS:
+            name = field_name(slot.key)
+            variable = cleaned.get(name)
+            if variable is not None and not self._slot_accepts(slot.key, variable, name):
+                variable = None
+            posted[slot.key] = variable
+
+        self._concerns = mapping.concerns(posted)
+        self._remapping = self._moves_a_slot(posted)
+        if self.acknowledgement is not None and not cleaned.get(ACKNOWLEDGE_FIELD):
+            self.add_error(ACKNOWLEDGE_FIELD, ACKNOWLEDGEMENT_REQUIRED)
+
+        return cleaned
+
+    def _moves_a_slot(self, posted: dict) -> bool:
+        """Whether this submit changes what fills any slot.
+
+        Compared against what the publication currently holds rather than
+        against the form's ``initial``, which is the same thing on the first
+        render and is stale by exactly one edit after a concurrent one.
+        """
+        stored = self.publication.mapped_variables()
+        return any(_pk(posted.get(key)) != _pk(stored.get(key)) for key in params.SLOT_KEYS)
+
+    def _slot_accepts(self, slot_key: str, variable, name: str) -> bool:
+        """Whether the model would take this variable in this slot.
+
+        Asked *of the model*, by building the row and cleaning it, rather than
+        by repeating its two conditions here. There is one unit refusal in this
+        plugin and one sentence explaining it, and a form that composed its own
+        would be the second — free to drift from the one the shell, the planner
+        and any later API all still read.
+        """
+        row = FortiVariableMapping(publication=self.publication, slot=slot_key, variable=variable)
+        try:
+            row.clean()
+        except ValidationError as refusal:
+            self.add_error(name, refusal.messages)
+            return False
+        return True
+
     # -- writing -------------------------------------------------------------
 
-    def save(self, commit=True):
-        """Save the publication, then its mapping.
+    def save(self) -> None:
+        """Write all eight rows; the model decides which of them changed.
 
-        In that order because a row is written through
-        :meth:`~.models.FortiVariableMapping.save`, which asks the publication to
-        raise its generation when the variable moved — and the publication has to
-        be the saved one for that to land.
-
-        All eight rows are written at every submit and the model decides which of
-        them changed. It reads what the row held from the database rather than
-        from memory, so it is the only thing here in a position to know; a second
-        comparison in this method would be the same rule in a second place,
-        differing from the first exactly when a concurrent writer made it matter.
+        It reads what the row held from the database rather than from memory,
+        so it is the only thing here in a position to know; a comparison in
+        this method would be the same rule in a second place, differing from
+        the first exactly when a concurrent writer made it matter.
         """
-        instance = super().save(commit)
-        if commit and self.has_mapping:
-            self._save_mapping()
-        return instance
-
-    def _save_mapping(self) -> None:
-        rows = {row.slot: row for row in self.instance.variable_mappings.all()}
+        rows = {row.slot: row for row in self.publication.variable_mappings.all()}
         for slot in params.SLOTS:
-            row = rows.get(slot.key) or FortiVariableMapping(publication=self.instance, slot=slot.key)
+            row = rows.get(slot.key) or FortiVariableMapping(publication=self.publication, slot=slot.key)
             row.variable = self.cleaned_data.get(field_name(slot.key))
             row.save()
 
@@ -396,9 +401,5 @@ def _mapping_fields() -> dict:
 #: Assembled rather than written as a class body, because the fields are the
 #: vocabulary and the vocabulary is derived. The metaclass collects them from the
 #: namespace exactly as it would from a class body, so what comes out is an
-#: ordinary ``WagtailAdminModelForm`` subclass.
-FortiPublicationForm = type(
-    "FortiPublicationForm",
-    (VariableMappingMixin, WagtailAdminModelForm),
-    _mapping_fields(),
-)
+#: ordinary ``Form`` subclass.
+VariableMappingForm = type("VariableMappingForm", (VariableMappingFormBase,), _mapping_fields())

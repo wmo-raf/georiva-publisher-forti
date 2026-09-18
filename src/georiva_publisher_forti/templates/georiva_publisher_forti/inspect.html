@@ -1,0 +1,199 @@
+{% extends "wagtailadmin/generic/inspect.html" %}
+{% load i18n wagtailadmin_tags l10n %}
+{% comment %}
+    One publication, read rather than changed.
+
+    Five sections in the order an operator's questions arrive: what is this,
+    can it publish, what does it publish, what did it last publish, what has it
+    been doing. The two field lists come from Wagtail's own inspect machinery;
+    readiness, the mapping and the history arrive from `wagtail_hooks.py` with
+    every distinction already drawn, so nothing is decided in an `{% if %}` here
+    beyond whether a slot has a variable — and that word, too, is the form's.
+
+    The two actions sit at the top of the body rather than in the slim header,
+    which is where `template_conventions.md` puts action bars: the header cannot
+    carry a POST, and a re-queue is one. Edit and Delete stay in Wagtail's own
+    header dropdown, where every inspect page has them.
+{% endcomment %}
+
+{% block extra_css %}
+    {{ block.super }}
+    <style>
+        .fi-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6em;
+            align-items: center;
+            margin: 0 0 1.6em;
+        }
+
+        .fi-actions form {
+            display: inline;
+        }
+
+        .fi-section {
+            margin-top: 2.2em;
+        }
+
+        .fi-section h2 {
+            font-size: 1.15em;
+            margin: 0 0 0.6em;
+        }
+
+        .fi-lead {
+            color: var(--w-color-grey-400);
+            margin: 0 0 1em;
+            max-width: 48em;
+        }
+
+        .fi-fields {
+            display: grid;
+            grid-template-columns: max-content 1fr;
+            gap: 0.45em 1.6em;
+            margin: 0;
+            max-width: 60em;
+        }
+
+        .fi-fields dt {
+            color: var(--w-color-grey-400);
+            font-size: 0.85em;
+            padding-top: 0.15em;
+        }
+
+        .fi-fields dd {
+            margin: 0;
+            word-break: break-word;
+        }
+
+        .fi-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .fi-table th,
+        .fi-table td {
+            text-align: left;
+            padding: 0.55em 0.8em 0.55em 0;
+            border-bottom: 1px solid var(--w-color-border-furniture);
+            vertical-align: top;
+        }
+
+        .fi-table thead th {
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--w-color-grey-400);
+            white-space: nowrap;
+        }
+
+        .fi-slot {
+            white-space: nowrap;
+            font-weight: 600;
+        }
+
+        .fi-units {
+            display: block;
+            font-weight: 400;
+            font-size: 0.85em;
+            color: var(--w-color-grey-400);
+        }
+
+        .fi-feeds {
+            font-size: 0.85em;
+            color: var(--w-color-grey-400);
+            max-width: 22em;
+        }
+
+        .fi-incomplete {
+            color: var(--w-color-grey-400);
+            font-size: 0.85em;
+        }
+    </style>
+{% endblock %}
+
+{% block fields_output %}
+    <div class="fi-actions">
+        {% if can_change %}
+            <a class="button bicolor button--icon" href="{{ mapping_url }}">
+                {% icon name="list-ul" wrapped=1 %}{% trans "Variables" %}
+            </a>
+            <form method="post" action="{{ queue_rebuild_url }}">
+                {% csrf_token %}
+                <button type="submit" class="button button-secondary bicolor button--icon">
+                    {% icon name="rotate" wrapped=1 %}{% trans "Republish" %}
+                </button>
+            </form>
+        {% endif %}
+    </div>
+
+    <section class="fi-section">
+        <h2>{% trans "Forecast" %}</h2>
+        <p class="fi-lead">
+            {% blocktrans trimmed with slug=object.slug %}
+                The app fetches this forecast from /api/forecast/{{ slug }}/.
+            {% endblocktrans %}
+        </p>
+        <dl class="fi-fields">
+            {% for field in identity %}
+                <dt>{{ field.label }}</dt>
+                <dd>{% if field.component %}{% component field.component %}{% else %}{{ field.value|localize }}{% endif %}</dd>
+            {% endfor %}
+        </dl>
+    </section>
+
+    <section class="fi-section">
+        <h2>{% trans "Readiness" %}</h2>
+        {% include "georiva_publisher_forti/panels/readiness.html" %}
+    </section>
+
+    <section class="fi-section">
+        <h2>{% trans "Variables" %}</h2>
+        <p class="fi-lead">
+            {% blocktrans trimmed %}
+                Which variable is published as each Forti parameter. Change them on the Variables page.
+            {% endblocktrans %}
+        </p>
+        <table class="fi-table">
+            <thead>
+                <tr>
+                    <th scope="col">{% trans "Forti parameter" %}</th>
+                    <th scope="col">{% trans "Shown in the app as" %}</th>
+                    <th scope="col">{% trans "Variable" %}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in mapping %}
+                    <tr>
+                        <th scope="row" class="fi-slot">
+                            <code>{{ row.slot.key }}</code>
+                            <span class="fi-units">{{ row.slot.units }}</span>
+                        </th>
+                        <td class="fi-feeds">{{ row.feeds }}</td>
+                        <td>
+                            {% if row.variable %}
+                                {{ row.variable.slug }}{% if row.variable.name != row.variable.slug %} — {{ row.variable.name }}{% endif %}
+                            {% else %}
+                                <span class="fi-incomplete">{{ incomplete_label }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section class="fi-section">
+        <h2>{% trans "Last publish" %}</h2>
+        <dl class="fi-fields">
+            {% for field in last_build %}
+                <dt>{{ field.label }}</dt>
+                <dd>{% if field.component %}{% component field.component %}{% else %}{{ field.value|localize }}{% endif %}</dd>
+            {% endfor %}
+        </dl>
+    </section>
+
+    <section class="fi-section">
+        <h2>{% trans "History" %}</h2>
+        {% include "georiva_publisher_forti/panels/publish_history.html" %}
+    </section>
+{% endblock %}
