@@ -441,7 +441,7 @@ def register_forti_serving_menu_item():
     not data anybody browses. It sits beside Boundaries, which is gated the same
     way and for the same kind of reason."""
     return SuperuserMenuItem(
-        _("Forti serving"),
+        _("Forecast serving status"),
         reverse_lazy("forti_verification_panel"),
         icon_name="site",
         order=130,
@@ -467,9 +467,9 @@ def verification_panel(request):
     context = {
         "breadcrumbs_items": [
             {"url": reverse("wagtailadmin_home"), "label": _("Home")},
-            {"url": None, "label": _("Forti serving")},
+            {"url": None, "label": _("Forecast serving status")},
         ],
-        "header_title": _("Forti serving"),
+        "header_title": _("Forecast serving status"),
         "header_icon": "site",
         "report": verification.report(),
     }

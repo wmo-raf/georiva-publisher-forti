@@ -1,7 +1,7 @@
 {% extends "wagtailadmin/generic/base.html" %}
 {% load i18n wagtailadmin_tags %}
 
-{% block titletag %}{% trans "Forti serving" %}{% endblock %}
+{% block titletag %}{% trans "Forecast serving status" %}{% endblock %}
 
 {% block extra_css %}
     {{ block.super }}
@@ -113,6 +113,16 @@
             max-width: 60em;
         }
 
+        .fv-summary {
+            margin: 1em 0 0;
+            font-size: 1.05em;
+        }
+
+        .fv-note--ok {
+            background: color-mix(in srgb, var(--w-color-positive-100) 12%, transparent);
+            border-color: color-mix(in srgb, var(--w-color-positive-100) 40%, transparent);
+        }
+
         .fv-note--warning {
             background: color-mix(in srgb, var(--w-color-warning-100) 16%, transparent);
             border-color: color-mix(in srgb, var(--w-color-warning-100) 45%, transparent);
@@ -163,27 +173,45 @@
 {% endblock %}
 
 {% block main_content %}
+    {% comment %}
+        Every sentence on this page is "what is happening, then what to do", in
+        the words verification.py decided. The template adds headings, the one
+        summary line at the top, and nothing an operator has to interpret. Why
+        the page is read-only, how the digests are compared and the rest of the
+        reasoning is in the README, under "Verifying it is actually serving".
+    {% endcomment %}
     <p class="fv-lead">
         {% blocktrans trimmed %}
-            What this instance intends to serve, and what is actually serving it. A config
-            document makes four hops — out of this database, onto the bucket, into the pair's
-            volume, and into the process that reads it — and each one can be stuck without the
-            next one knowing.
+            Is this instance serving point forecasts through Forti? Below is the path a
+            configuration file takes from the GeoRiva database to the two Forti services,
+            which areas are being served, and whether the services are healthy.
         {% endblocktrans %}
-        {% blocktrans trimmed %}
-            Read-only on purpose: the database is the single authority and the refresh rewrites
-            the bucket from it every five minutes, so anything typed here would be reverted
-            before it took effect.
-        {% endblocktrans %}
+        {% trans "This page is read-only; change what is served from the publications list." %}
     </p>
+
+    <div class="fv-note fv-summary {% if report.healthy %}fv-note--ok{% else %}fv-note--warning{% endif %}">
+        <p>
+            {% if report.healthy %}
+                <strong>{% trans "Everything is serving as intended." %}</strong>
+            {% else %}
+                <strong>
+                    {% blocktrans trimmed count problems=report.problem_count %}
+                        {{ problems }} problem found — see below.
+                    {% plural %}
+                        {{ problems }} problems found — see below.
+                    {% endblocktrans %}
+                </strong>
+            {% endif %}
+        </p>
+    </div>
 
     {% if not report.answered %}
         <div class="fv-note fv-note--warning">
             <p>
                 {% blocktrans trimmed with deadline=report.deadline %}
-                    The publications bucket did not answer within {{ deadline }} seconds, so every
-                    hop past the first below says so rather than guessing. This is not the same
-                    thing as nothing having been published yet.
+                    The bucket did not answer within {{ deadline }} seconds, so every step past
+                    the first is marked unreachable. This does not mean nothing has been
+                    published. Check the bucket connection.
                 {% endblocktrans %}
             </p>
         </div>
@@ -195,10 +223,10 @@
     {% endcomment %}
     {% for chain in report.chains %}
         <section class="fv-section">
-            <h2>{{ chain.document }}</h2>
+            <h2>{% blocktrans trimmed with document=chain.document %}Configuration file: {{ document }}{% endblocktrans %}</h2>
             <p class="fv-where">
-                {% blocktrans trimmed with reader=chain.reader path=chain.path %}
-                    Read by {{ reader }}. Written to _forti/{{ path }}.
+                {% blocktrans trimmed with reader=chain.reader_role path=chain.path %}
+                    Used by {{ reader }}. Stored on the bucket as <code>_forti/{{ path }}</code>.
                 {% endblocktrans %}
             </p>
             <p class="fv-verdict">{{ chain.verdict }}</p>
@@ -206,22 +234,22 @@
             <table class="fv-table">
                 <thead>
                     <tr>
-                        <th scope="col">{% trans "Hop" %}</th>
-                        <th scope="col">{% trans "Where" %}</th>
-                        <th scope="col">{% trans "Digest" %}</th>
-                        <th scope="col">{% trans "Against the database" %}</th>
+                        <th scope="col">{% trans "Step" %}</th>
+                        <th scope="col">{% trans "Where the file is" %}</th>
+                        <th scope="col">{% trans "Compared with the database" %}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for hop in chain.hops %}
                         <tr>
                             <th scope="row">{{ hop.label }}</th>
-                            <td>{{ hop.where }}</td>
                             <td>
+                                {{ hop.where }}
                                 {% if hop.sha %}
-                                    <code title="{{ hop.sha }}">{{ hop.short }}</code>
-                                {% else %}
-                                    <span class="fv-null">&mdash;</span>
+                                    <span class="fv-detail">
+                                        {% trans "Checksum" %}
+                                        <code title="{{ hop.sha }}">{{ hop.short }}</code>
+                                    </span>
                                 {% endif %}
                             </td>
                             <td>
@@ -240,29 +268,25 @@
         that proves data is being served out of it.
     {% endcomment %}
     <section class="fv-section">
-        <h2>{% trans "Areas resident" %}</h2>
+        <h2>{% trans "Areas being served" %}</h2>
         <p class="fv-where">
             {% blocktrans trimmed %}
-                Every area rawdataforecaster is configured with, in the order its configuration
-                lists them. An area on the bucket that nobody asked for is not that process's
-                business and is not here.
+                Every area rawdataforecaster (the forecast reader) is configured to serve, and
+                which version of each it has loaded.
             {% endblocktrans %}
         </p>
 
         {% if report.store_error %}
             <div class="fv-note fv-note--critical">
                 <p>
-                    <strong>{% trans "The store is not answering:" %}</strong>
+                    <strong>{% trans "The forecast reader cannot list the bucket:" %}</strong>
                     <code>{{ report.store_error }}</code>
                 </p>
                 <p>
                     {% blocktrans trimmed %}
-                        The versions below do not decay — they are the last listing that worked — so
-                        without this line a store nobody can reach looks exactly like one holding
-                        precisely what is loaded. This is also the only place a failure to list
-                        _forti/latest/ is ever visible: one unparseable object there takes every
-                        organisation off the air, fatally at startup, and the listing is not
-                        forkable at the pinned version.
+                        The versions below are from its last successful listing and may be out of
+                        date. Check the bucket connection; if the error names a broken object,
+                        remove that object.
                     {% endblocktrans %}
                 </p>
             </div>
@@ -274,9 +298,9 @@
                     <tr>
                         <th scope="col">{% trans "Area" %}</th>
                         <th scope="col">{% trans "Published by GeoRiva" %}</th>
-                        <th scope="col">{% trans "Seen on the bucket" %}</th>
-                        <th scope="col">{% trans "Resident" %}</th>
-                        <th scope="col">{% trans "What that means" %}</th>
+                        <th scope="col">{% trans "On the bucket" %}</th>
+                        <th scope="col">{% trans "Loaded" %}</th>
+                        <th scope="col">{% trans "Status" %}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -285,21 +309,21 @@
                             <th scope="row"><code>{{ row.area }}</code></th>
                             <td>
                                 {% if row.published is None %}
-                                    <span class="fv-null" title="{% trans 'No publication on this instance names this area.' %}">&mdash;</span>
+                                    <span class="fv-null" title="{% trans 'No publication on this instance uses this area.' %}">&mdash;</span>
                                 {% else %}
                                     {{ row.published }}
                                 {% endif %}
                             </td>
                             <td>
                                 {% if row.available is None %}
-                                    <span class="fv-null" title="{% trans 'null — no marker at all, which is not version 0.' %}">{% trans "no marker" %}</span>
+                                    <span class="fv-null" title="{% trans 'The forecast reader found no version of this area on the bucket.' %}">{% trans "none" %}</span>
                                 {% else %}
                                     {{ row.available }}
                                 {% endif %}
                             </td>
                             <td>
                                 {% if row.loaded is None %}
-                                    <span class="fv-null" title="{% trans 'null — nothing resident, which is not version 0.' %}">{% trans "nothing" %}</span>
+                                    <span class="fv-null" title="{% trans 'The forecast reader has not loaded any version of this area.' %}">{% trans "none" %}</span>
                                 {% else %}
                                     {{ row.loaded }}
                                 {% endif %}
@@ -327,11 +351,11 @@
         whether or not anything moved, deliberately.
     {% endcomment %}
     <section class="fv-section">
-        <h2>{% trans "The pair, and the sidecar that feeds it" %}</h2>
+        <h2>{% trans "Forti services" %}</h2>
         <p class="fv-where">
             {% blocktrans trimmed %}
-                Ages are taken from the timestamp inside each document, never from when the object
-                was last written — the sidecar re-uploads every pass whether anything moved or not.
+                The two Forti services, and the sync helper (sidecar) that copies configuration
+                files to them and their status back to the bucket.
             {% endblocktrans %}
         </p>
 
@@ -340,28 +364,27 @@
                 {% if report.sidecar.troubled %}
                     <p>
                         {% blocktrans trimmed %}
-                            The sidecar ran and did not finish its job. A volume that disagrees with the
-                            bucket, or a status file older than the process that wrote it, follows from
-                            this rather than from either Go service.
+                            The sync helper ran but could not finish its last pass, so the Forti
+                            services may be running on old configuration. Check the sidecar logs.
                         {% endblocktrans %}
                     </p>
                 {% endif %}
                 <dl class="fv-pairs">
                     <div>
-                        <dt>{% trans "Sidecar last pass" %}</dt>
+                        <dt>{% trans "Sync helper last ran" %}</dt>
                         <dd>{{ report.sidecar.checked_at }}{% if report.sidecar.age %} ({{ report.sidecar.age }}){% endif %}</dd>
                     </div>
                     <div>
-                        <dt>{% trans "Interval" %}</dt>
-                        <dd>{{ report.sidecar.interval_seconds|default_if_none:"—" }} s</dd>
+                        <dt>{% trans "Runs every" %}</dt>
+                        <dd>{% if report.sidecar.interval_seconds is not None %}{% blocktrans trimmed with seconds=report.sidecar.interval_seconds %}{{ seconds }} seconds{% endblocktrans %}{% else %}&mdash;{% endif %}</dd>
                     </div>
                     <div>
-                        <dt>{% trans "Config fetched" %}</dt>
-                        <dd>{{ report.sidecar.fetch_ok|yesno:"yes,no,unknown" }}</dd>
+                        <dt>{% trans "Configuration copied in" %}</dt>
+                        <dd>{{ report.sidecar.fetch_ok|yesno:_("yes,no,unknown") }}</dd>
                     </div>
                     <div>
-                        <dt>{% trans "Status uploaded" %}</dt>
-                        <dd>{{ report.sidecar.upload_ok|yesno:"yes,no,unknown" }}</dd>
+                        <dt>{% trans "Status copied out" %}</dt>
+                        <dd>{{ report.sidecar.upload_ok|yesno:_("yes,no,unknown") }}</dd>
                     </div>
                 </dl>
             {% else %}
@@ -372,16 +395,16 @@
         <table class="fv-table">
             <thead>
                 <tr>
-                    <th scope="col">{% trans "Process" %}</th>
-                    <th scope="col">{% trans "Last attempt" %}</th>
-                    <th scope="col">{% trans "Outcome" %}</th>
-                    <th scope="col">{% trans "What it said" %}</th>
+                    <th scope="col">{% trans "Service" %}</th>
+                    <th scope="col">{% trans "Last loaded configuration" %}</th>
+                    <th scope="col">{% trans "Result" %}</th>
+                    <th scope="col">{% trans "Details" %}</th>
                 </tr>
             </thead>
             <tbody>
                 {% for module in report.modules %}
                     <tr>
-                        <th scope="row">{{ module.module }}</th>
+                        <th scope="row">{{ module.role }}</th>
                         <td>
                             {% if module.loaded_at %}
                                 {{ module.loaded_at }}{% if module.age %}<span class="fv-detail">{{ module.age }}</span>{% endif %}
@@ -393,9 +416,9 @@
                             {% if not module.reported %}
                                 <span class="fv-badge fv-badge--{{ module.presence }}">{% trans "no status" %}</span>
                             {% elif module.ok %}
-                                <span class="fv-badge fv-badge--agrees">{% trans "applied" %}</span>
+                                <span class="fv-badge fv-badge--agrees">{% trans "loaded" %}</span>
                             {% else %}
-                                <span class="fv-badge fv-badge--refused">{% trans "refused" %}</span>
+                                <span class="fv-badge fv-badge--refused">{% trans "rejected" %}</span>
                             {% endif %}
                         </td>
                         <td>
@@ -408,12 +431,12 @@
                             {% if module.pending_restart %}
                                 <span class="fv-detail">
                                     {% blocktrans trimmed with fields=module.pending_restart|join:", " %}
-                                        Applied, but a restart is required for: {{ fields }}
+                                        Loaded, but these settings only take effect after a restart: {{ fields }}. Restart the Forti services.
                                     {% endblocktrans %}
                                 </span>
                             {% endif %}
                             {% if module.applied %}
-                                <span class="fv-detail">{{ module.applied|join:", " }}</span>
+                                <span class="fv-detail">{% trans "Applied:" %} {{ module.applied|join:", " }}</span>
                             {% endif %}
                         </td>
                     </tr>
@@ -429,7 +452,10 @@
         in a way no test can reach.
     {% endcomment %}
     <section class="fv-section">
-        <h2>{% trans "Compose file and plugin" %}</h2>
+        <h2>{% trans "Versions" %}</h2>
+        <p class="fv-where">
+            {% trans "The compose file that runs the Forti services must match the installed plugin." %}
+        </p>
         <div class="fv-note {% if report.versions.agree is False %}fv-note--warning{% endif %}">
             <dl class="fv-pairs">
                 <div>
@@ -441,8 +467,8 @@
                     <dd>{{ report.versions.plugin|default:"—" }}</dd>
                 </div>
                 <div>
-                    <dt>{% trans "Agreement" %}</dt>
-                    <dd>{{ report.versions.agree|yesno:"they match,they have drifted,nothing to compare" }}</dd>
+                    <dt>{% trans "Match" %}</dt>
+                    <dd>{{ report.versions.agree|yesno:_("yes,no,cannot tell") }}</dd>
                 </div>
             </dl>
             {% if report.versions.detail %}<p class="fv-detail">{{ report.versions.detail }}</p>{% endif %}
@@ -451,7 +477,8 @@
 
     <p class="fv-detail">
         {% blocktrans trimmed with read_at=report.read_at %}
-            Read from the bucket at {{ read_at }}. Nothing on this page is cached.
+            Checked at {{ read_at }} — reload the page to check again.
         {% endblocktrans %}
+        <a href="https://github.com/wmo-raf/georiva-publisher-forti#verifying-it-is-actually-serving">{% trans "How this page works" %}</a>
     </p>
 {% endblock %}
