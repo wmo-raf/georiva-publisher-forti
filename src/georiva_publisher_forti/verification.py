@@ -76,11 +76,53 @@ from pathlib import PurePosixPath
 
 from django.conf import settings
 from django.utils.dateparse import parse_datetime
+from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
 
 from . import config, rdfconfig
 from .config import ABSENT, PRESENT, UNREACHABLE
 
 logger = logging.getLogger(__name__)
+
+# Every sentence an operator reads is built here and not in the template, and
+# every one of them follows one shape: what is happening, then what to do (or
+# "Nothing to do"). The "what to do" half draws on a fixed vocabulary — the
+# actions an operator of a national met service can actually take — so a
+# sentence never sends them somewhere the page has not rendered:
+#
+#   wait for the next refresh · re-publish this area · restart the Forti
+#   services · check the bucket connection · update the compose file · check a
+#   service's logs · nothing to do
+#
+# Constants are ``gettext_lazy`` and interpolated sentences are ``gettext`` at
+# call time with ``%`` named placeholders, so ``makemessages`` sees every one.
+
+#: The plain roles beside the real names. The names are what an operator sees
+#: in ``docker ps`` and in logs, so they stay; the role is what tells a reader
+#: who has never met Forti which one to look at.
+ROLES = {
+    "rawdataforecaster": gettext_lazy("the forecast reader"),
+    "jsonfrontend": gettext_lazy("the API front end"),
+    "sidecar": gettext_lazy("the sync helper"),
+}
+
+WAIT_FOR_REFRESH = gettext_lazy("Wait for the next refresh (up to 5 minutes).")
+REPUBLISH = gettext_lazy("Re-publish this area.")
+CHECK_BUCKET = gettext_lazy("Check the bucket connection.")
+UPDATE_COMPOSE = gettext_lazy("Update the compose file to the tag for this plugin version.")
+NOTHING_TO_DO = gettext_lazy("Nothing to do.")
+
+
+def role_of(module: str) -> str:
+    """``rawdataforecaster (the forecast reader)`` — the name first, because
+    the name is what the operator will grep for."""
+    role = ROLES.get(module)
+    return f"{module} ({role})" if role else module
+
+
+def check_logs(module: str) -> str:
+    return _("Check the %(module)s logs.") % {"module": module}
+
 
 #: Hop 1 only. No enabled publication would produce a document this process
 #: would accept, so :mod:`config` writes nothing — which means "leave what is on
@@ -123,16 +165,18 @@ NO_READER = "no reader"
 #: configured area; :meth:`ResidentAreas.of` reaches it one publication at a
 #: time — and an operator who read two different sentences for one state would
 #: reasonably conclude they were two states.
-NOT_IN_THE_AREA_LIST = (
-    "Not in the configuration this reader is running — it is behind the area list GeoRiva intends, "
-    "so nothing would load this area."
+NOT_IN_THE_AREA_LIST = gettext_lazy(
+    "This area is not in the configuration the forecast reader is running, so nothing would load it. "
+    "Wait for the next refresh (up to 5 minutes); if it is still missing, restart the Forti services."
 )
 
 #: What a reader that reports no area state proves, and what it does not. Said
-#: once for the same reason :data:`NOT_IN_THE_AREA_LIST` is.
-NO_AREA_STATE = (
-    "This rawdataforecaster reports no state. M5.1's second fix — the status file listing resident "
-    "areas — is not in the image that is running, so a config that parsed is all this instance can prove."
+#: once for the same reason :data:`NOT_IN_THE_AREA_LIST` is. The image is too
+#: old to report area state (M5.1's second fix), which is why the action is the
+#: compose file rather than the area.
+NO_AREA_STATE = gettext_lazy(
+    "rawdataforecaster (the forecast reader) is not reporting which areas it has loaded, because the "
+    "version running is too old to say. Update the compose file to the tag for this plugin version."
 )
 
 #: What a *publication's* row says when the reader cannot list the store. The
@@ -140,7 +184,10 @@ NO_AREA_STATE = (
 #: choked on — which can belong to another organisation. So the row an
 #: organisation administrator reads says *that* the listing is failing and the
 #: panel, which is the instance admin's, says what it said.
-LISTING_IS_FAILING = "its listing of _forti/latest/ is failing, which the instance admin's Forti serving panel reports"
+LISTING_IS_FAILING = gettext_lazy(
+    "the forecast reader cannot list the bucket "
+    "(the instance admin can see why under Settings → Forecast serving status)"
+)
 
 #: Where each process leaves its status. ``configwatch`` writes
 #: ``<status-dir>/<module>.json`` (`configwatch.go:217`) and the sidecar copies
@@ -205,19 +252,19 @@ DISTRIBUTION = "georiva-publisher-forti"
 
 
 #: What each badge says out loud. Deliberately not the presence constant: an
-#: operator reads "not yet" and "could not read" as different afternoons, which
+#: operator reads "missing" and "unreachable" as different afternoons, which
 #: is the whole point of their being different states.
 _BADGE_LABELS = {
-    "intended": "the reference",
-    "agrees": "agrees",
-    "differs": "differs",
-    ABSENT: "not yet",
-    UNREACHABLE: "could not read",
-    WITHHELD: "nothing to write",
-    FOREIGN: "not this document",
-    REFUSED: "refused",
-    UNREPORTED: "cannot say",
-    NO_READER: "no reader",
+    "intended": gettext_lazy("source"),
+    "agrees": gettext_lazy("matches"),
+    "differs": gettext_lazy("differs"),
+    ABSENT: gettext_lazy("missing"),
+    UNREACHABLE: gettext_lazy("unreachable"),
+    WITHHELD: gettext_lazy("not needed"),
+    FOREIGN: gettext_lazy("wrong file"),
+    REFUSED: gettext_lazy("rejected"),
+    UNREPORTED: gettext_lazy("unknown"),
+    NO_READER: gettext_lazy("no status"),
 }
 
 
@@ -277,6 +324,10 @@ class Chain:
     #: The name of the first hop that does not carry what hop 1 intends, or
     #: ``None`` when every hop does. The answer to "where did it stop".
     broken_at: str | None = None
+
+    @property
+    def reader_role(self) -> str:
+        return role_of(self.reader)
 
 
 @dataclass(frozen=True)
@@ -374,6 +425,10 @@ class Residency:
 
     @property
     def badge_label(self) -> str:
+        if self.badge == ABSENT:
+            # A hop that is absent is "missing"; a publication that has never
+            # published is not missing anything, it has simply not started.
+            return _("not published yet")
         return _BADGE_LABELS.get(self.badge, self.badge)
 
     @property
@@ -435,7 +490,7 @@ class ResidentAreas:
                 return Residency(
                     area,
                     presence=PRESENT,
-                    detail="Nothing has been published under this key and nothing is resident.",
+                    detail=_("Nothing has been published for this area yet, so nothing is loaded. Nothing to do."),
                 )
             return Residency(area, published, presence=PRESENT, ok=False, detail=NOT_IN_THE_AREA_LIST)
 
@@ -471,6 +526,10 @@ class Module:
     def reported(self) -> bool:
         return self.presence == PRESENT
 
+    @property
+    def role(self) -> str:
+        return role_of(self.module)
+
 
 @dataclass(frozen=True)
 class Sidecar:
@@ -499,11 +558,11 @@ class Sidecar:
         interval from somewhere else would be the second place that fact lives.
         """
         if self.reported and self.interval_seconds:
-            return (
-                f"The sidecar passes every {self.interval_seconds} s and last ran "
-                f"{self.age or 'at an unknown time'}, so one pass of lag is ordinary here and longer is not."
-            )
-        return "One sidecar pass of lag is ordinary here; longer is not."
+            return _("The sync helper copies files every %(interval)s seconds and last ran %(age)s.") % {
+                "interval": self.interval_seconds,
+                "age": self.age or _("at an unknown time"),
+            }
+        return ""
 
     @property
     def troubled(self) -> bool:
@@ -539,6 +598,35 @@ class Report:
     areas_detail: str
     store_error: str
     versions: Versions
+
+    @property
+    def problem_count(self) -> int:
+        """How many things below need an operator, for the one line at the top.
+
+        Counted from the same fields the sections render, so the summary can
+        never say "all fine" over a red badge. A fresh instance that has not cut
+        over counts its two chains as problems — it is not serving, and the
+        sentences beside them say what to do about that.
+        """
+        count = 0
+        if not self.answered:
+            count += 1
+        count += sum(1 for chain in self.chains if chain.broken_at)
+        count += sum(1 for row in self.areas if not row.ok)
+        if not self.areas and self.areas_detail:
+            count += 1
+        if self.store_error:
+            count += 1
+        if not self.sidecar.reported or self.sidecar.troubled:
+            count += 1
+        count += sum(1 for module in self.modules if module.reported and module.ok is False)
+        if self.versions.agree is False:
+            count += 1
+        return count
+
+    @property
+    def healthy(self) -> bool:
+        return self.problem_count == 0
 
 
 @dataclass(frozen=True)
@@ -581,16 +669,18 @@ def read_status(sink, path: str, module: str) -> _Status:
         return _Status(UNREACHABLE, detail=f"{type(exc).__name__}: {exc}")
 
     if not isinstance(payload, dict):
-        return _Status(FOREIGN, detail=f"{path} is not a JSON object.")
+        return _Status(
+            FOREIGN,
+            detail=_("%(path)s is not a valid status file. %(action)s")
+            % {"path": path, "action": check_logs(SIDECAR_MODULE)},
+        )
 
     found = payload.get("module")
     if found != module:
         return _Status(
             FOREIGN,
-            detail=(
-                f"{path} says it is {found!r}, not {module!r}. A status document under the "
-                f"wrong basename is refused rather than read: config/ and status/ share names."
-            ),
+            detail=_("%(path)s belongs to %(found)s, not %(module)s, so it was not read. %(action)s")
+            % {"path": path, "found": found, "module": module, "action": check_logs(SIDECAR_MODULE)},
         )
     return _Status(PRESENT, payload=payload)
 
@@ -657,14 +747,14 @@ def _age(raw) -> str:
 
     seconds = int((datetime.now(UTC) - moment).total_seconds())
     if seconds < 0:
-        return "in the future"
+        return _("in the future")
     if seconds < 90:
-        return f"{seconds} s ago"
+        return _("%(n)d seconds ago") % {"n": seconds}
     if seconds < 5400:
-        return f"{seconds // 60} min ago"
+        return _("%(n)d minutes ago") % {"n": seconds // 60}
     if seconds < 172800:
-        return f"{seconds // 3600} h ago"
-    return f"{seconds // 86400} d ago"
+        return _("%(n)d hours ago") % {"n": seconds // 3600}
+    return _("%(n)d days ago") % {"n": seconds // 86400}
 
 
 def _strings(payload, key) -> tuple[str, ...]:
@@ -679,7 +769,10 @@ def _sidecar(reading: _Status) -> Sidecar:
         return Sidecar(
             presence=reading.presence,
             detail=reading.detail
-            or ("Nothing has written _forti/status/sidecar.json. The pair has never been started against this bucket."),
+            or _(
+                "The sync helper (sidecar) has never reported to this bucket, so the Forti services have "
+                "probably never been started against it. Start the Forti services."
+            ),
         )
 
     payload = reading.payload
@@ -702,7 +795,9 @@ def _module(module: str, reading: _Status) -> Module:
         return Module(
             module=module,
             presence=reading.presence,
-            detail=reading.detail or f"{module} has never written a status file to this bucket.",
+            detail=reading.detail
+            or _("%(module)s has never reported its status to this bucket. Start the Forti services.")
+            % {"module": role_of(module)},
         )
 
     payload = reading.payload
@@ -730,7 +825,7 @@ def _versions(sidecar: Sidecar) -> Versions:
         return Versions(
             plugin=installed,
             agree=None,
-            detail="The sidecar has not reported a compose version, so there is nothing to compare.",
+            detail=_("The sync helper has not reported which compose file is running, so there is nothing to compare."),
         )
 
     if sidecar.compose_version == installed:
@@ -740,12 +835,8 @@ def _versions(sidecar: Sidecar) -> Versions:
         plugin=installed,
         compose=sidecar.compose_version,
         agree=False,
-        detail=(
-            f"The running compose file is {sidecar.compose_version}; the installed plugin is "
-            f"{installed}. Operators fetch the compose file by hand and install the plugin "
-            f"through plugins.toml, so the pairing is manual and this is how it drifts. Fetch "
-            f"deploy/compose.yml at the tag pinned for this plugin."
-        ),
+        detail=_("The running compose file is version %(compose)s but the installed plugin is %(plugin)s. %(action)s")
+        % {"compose": sidecar.compose_version, "plugin": installed, "action": UPDATE_COMPOSE},
     )
 
 
@@ -755,103 +846,109 @@ def _versions(sidecar: Sidecar) -> Versions:
 
 
 def _intended_hop(path: str, document: str, intended: dict) -> Hop:
+    label = _("1. Database")
+    where = _("GeoRiva's database — the source")
     sha = intended.get(path)
     if sha is not None:
-        return Hop("intended", "Intended", "GeoRiva's database", PRESENT, sha=sha)
+        return Hop("intended", label, where, PRESENT, sha=sha)
     return Hop(
         "intended",
-        "Intended",
-        "GeoRiva's database",
+        label,
+        where,
         WITHHELD,
-        detail=(
-            f"No enabled publication would produce a {document} either process would accept, "
-            f"so GeoRiva writes none. Whatever is on the bucket is left exactly as it is — "
-            f"an empty document is fatal at the next restart, and a stale one is not."
-        ),
+        detail=_(
+            "No enabled publication needs a %(document)s, so GeoRiva does not write one and leaves "
+            "the copy on the bucket as it is. %(action)s"
+        )
+        % {"document": document, "action": NOTHING_TO_DO},
     )
 
 
 def _bucket_hop(path: str, reading: config.Current) -> Hop:
-    where = f"_forti/{path}"
+    label = _("2. Bucket")
+    where = _("_forti/%(path)s on the bucket") % {"path": path}
     if reading.presence == PRESENT:
-        return Hop("bucket", "On the bucket", where, PRESENT, sha=reading.sha)
+        return Hop("bucket", label, where, PRESENT, sha=reading.sha)
     if reading.presence == ABSENT:
         return Hop(
             "bucket",
-            "On the bucket",
+            label,
             where,
             ABSENT,
-            detail=(
-                "Nothing has been written here. Either this instance has not cut over yet, or the refresh has not run."
-            ),
+            detail=_("No file on the bucket yet. %(action)s") % {"action": WAIT_FOR_REFRESH},
         )
-    return Hop("bucket", "On the bucket", where, UNREACHABLE, detail=reading.error or "")
+    return Hop("bucket", label, where, UNREACHABLE, detail=reading.error or "")
 
 
 def _volume_hop(document: str, sidecar: Sidecar) -> Hop:
-    where = f"the pair's config volume, /config/{document}"
+    label = _("3. Config folder")
+    where = _("/config/%(document)s inside the Forti services") % {"document": document}
 
     if sidecar.presence != PRESENT:
         presence = ABSENT if sidecar.presence == ABSENT else sidecar.presence
-        return Hop("volume", "In the volume", where, presence, detail=sidecar.detail)
+        return Hop("volume", label, where, presence, detail=sidecar.detail)
 
     if document not in sidecar.volume:
         return Hop(
             "volume",
-            "In the volume",
+            label,
             where,
             FOREIGN,
-            detail=(
-                f"sidecar.json reports no entry for {document}. Its volume map always carries "
-                f"both documents — a file that is not there prints as null — so this is a "
-                f"sidecar written by a different compose file."
-            ),
+            detail=_(
+                "The sync helper's status does not mention %(document)s, so it was written by a "
+                "different compose file. %(action)s"
+            )
+            % {"document": document, "action": UPDATE_COMPOSE},
         )
 
     sha = sidecar.volume[document]
     if sha:
-        return Hop("volume", "In the volume", where, PRESENT, sha=str(sha))
+        return Hop("volume", label, where, PRESENT, sha=str(sha))
     return Hop(
         "volume",
-        "In the volume",
+        label,
         where,
         ABSENT,
-        detail="The sidecar has not put this document in the volume. There was nothing on the bucket to fetch.",
+        detail=_(
+            "The sync helper has not copied this file yet because there was nothing on the bucket to copy. %(action)s"
+        )
+        % {"action": WAIT_FOR_REFRESH},
     )
 
 
 def _loaded_hop(module: str, status: Module) -> Hop:
-    where = f"{module}, as configwatch reports it"
+    label = _("4. Loaded")
+    where = _("what %(module)s has loaded") % {"module": role_of(module)}
 
     if status.presence != PRESENT:
-        return Hop("loaded", "Loaded", where, status.presence, detail=status.detail)
+        return Hop("loaded", label, where, status.presence, detail=status.detail)
 
+    errors = "; ".join(status.errors)
     if not status.loaded_sha:
         return Hop(
             "loaded",
-            "Loaded",
+            label,
             where,
             ABSENT,
-            detail=(
-                "The process has written a status file but names no configuration — it could "
-                "not read the file at all. " + "; ".join(status.errors)
-            ).strip(),
+            detail=_("%(module)s reported its status but could not read the file at all: %(errors)s. %(action)s")
+            % {"module": module, "errors": errors or _("no reason given"), "action": check_logs(module)},
         )
 
     if status.ok is False:
         return Hop(
             "loaded",
-            "Loaded",
+            label,
             where,
             REFUSED,
             sha=status.loaded_sha,
-            detail=(
-                "This document was read and rejected; the process is still serving the "
-                "configuration it had. " + "; ".join(status.errors)
-            ).strip(),
+            detail=_(
+                "%(module)s read the file and rejected it, so it is still using its previous "
+                "configuration: %(errors)s. %(action)s"
+            )
+            % {"module": module, "errors": errors or _("no reason given"), "action": check_logs(module)},
         )
 
-    return Hop("loaded", "Loaded", where, PRESENT, sha=status.loaded_sha)
+    return Hop("loaded", label, where, PRESENT, sha=status.loaded_sha)
 
 
 def _compared(hops: tuple[Hop, ...]) -> tuple[Hop, ...]:
@@ -883,17 +980,38 @@ def _compared(hops: tuple[Hop, ...]) -> tuple[Hop, ...]:
     return tuple(compared)
 
 
-def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[str, str | None]:
-    """One sentence, and the name of the hop it is about."""
+def _subject(hop: Hop, reader: str) -> str:
+    """The hop as the subject of a sentence — "the copy on the bucket" — because
+    the step labels are numbered headings and read as nonsense in prose."""
+    return {
+        "bucket": _("The copy on the bucket"),
+        "volume": _("The copy in the Forti config folder"),
+        "loaded": _("The copy loaded by %(module)s") % {"module": reader},
+    }.get(hop.name, hop.label)
+
+
+#: What to do when a hop is *present* but carries a different file from the
+#: database. Each hop has its own ordinary lag, so each has its own first move.
+_DIFFERS_ACTIONS = {
+    "bucket": WAIT_FOR_REFRESH,
+    "volume": gettext_lazy("Wait for the next sync pass; if it stays different, check the sidecar logs."),
+    "loaded": gettext_lazy("Wait for the next sync pass; if it stays different, restart the Forti services."),
+}
+
+
+def _verdict(document: str, reader: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[str, str | None]:
+    """What is happening, then what to do — and the name of the hop it is about."""
     intended = hops[0]
 
     if intended.presence == WITHHELD:
         carried = [hop for hop in hops[1:] if hop.sha]
         if carried:
             return (
-                f"GeoRiva would write no {document} right now, so nothing is being compared — "
-                f"the pair is running on the last document that was written, which is the "
-                f"correct outcome and not a stale one.",
+                _(
+                    "GeoRiva has nothing new to write for %(document)s, so the Forti services keep using "
+                    "the last file they received. %(action)s"
+                )
+                % {"document": document, "action": NOTHING_TO_DO},
                 None,
             )
         # "No sha anywhere" is not the same as "nothing was ever written": a hop
@@ -903,30 +1021,54 @@ def _verdict(document: str, hops: tuple[Hop, ...], sidecar: Sidecar) -> tuple[st
         unread = [hop for hop in hops[1:] if hop.presence in (UNREACHABLE, FOREIGN)]
         if unread:
             return (
-                f"GeoRiva would write no {document}. {unread[0].label}: could not be read, so "
-                f"whether the pair is running on an earlier one is unknown.",
+                _(
+                    "GeoRiva has nothing new to write for %(document)s, and %(subject)s could not be read, "
+                    "so it is unknown which file the Forti services are using. %(action)s"
+                )
+                % {"document": document, "subject": _subject(unread[0], reader).lower(), "action": CHECK_BUCKET},
                 unread[0].name,
             )
-        return (f"GeoRiva would write no {document}, and none has ever reached the pair.", "bucket")
+        return (
+            _(
+                "GeoRiva has nothing new to write for %(document)s, and no file has ever reached the "
+                "Forti services. Nothing to do until a publication is enabled."
+            )
+            % {"document": document},
+            "bucket",
+        )
 
     for hop in hops[1:]:
         if hop.agrees:
             continue
-        # Every verdict is "<the hop that stopped it>: <why>", because the hop
-        # labels are prepositional — "On the bucket", "In the volume" — and read
-        # as nonsense used as the subject of a sentence. The colon also makes the
-        # first word of the answer the operator's next question.
+        subject = _subject(hop, reader)
         if hop.presence == UNREACHABLE:
-            return (f"{hop.label}: could not be read. {hop.detail}", hop.name)
-        if hop.presence == PRESENT:
             return (
-                f"{hop.label}: a different document from the one GeoRiva intends. {sidecar.lag}",
+                _("%(subject)s could not be read: %(error)s. %(action)s")
+                % {"subject": subject, "error": hop.detail or _("no reason given"), "action": CHECK_BUCKET},
                 hop.name,
             )
-        # ABSENT, FOREIGN and REFUSED each carry a whole sentence of their own.
-        return (f"{hop.label}: {hop.detail}", hop.name)
+        if hop.presence == PRESENT:
+            return (
+                " ".join(
+                    part
+                    for part in (
+                        _("%(subject)s is a different file from the one in the database.") % {"subject": subject},
+                        sidecar.lag,
+                        str(_DIFFERS_ACTIONS[hop.name]),
+                    )
+                    if part
+                ),
+                hop.name,
+            )
+        # ABSENT, FOREIGN and REFUSED each carry a whole sentence of their own,
+        # already in the "what is happening, what to do" shape.
+        return (_("%(subject)s: %(detail)s") % {"subject": subject, "detail": hop.detail}, hop.name)
 
-    return (f"Every hop carries the {document} GeoRiva intends.", None)
+    return (
+        _("Every step has the same %(document)s as the database. %(action)s")
+        % {"document": document, "action": NOTHING_TO_DO},
+        None,
+    )
 
 
 def _chain(spec: ChainSpec, intended: dict, bucket: config.Current, sidecar: Sidecar, status: Module) -> Chain:
@@ -939,7 +1081,7 @@ def _chain(spec: ChainSpec, intended: dict, bucket: config.Current, sidecar: Sid
             _loaded_hop(spec.module, status),
         )
     )
-    verdict, broken_at = _verdict(document, hops, sidecar)
+    verdict, broken_at = _verdict(document, spec.module, hops, sidecar)
     return Chain(
         document=document, reader=spec.module, path=spec.config_path, hops=hops, verdict=verdict, broken_at=broken_at
     )
@@ -966,22 +1108,41 @@ def _area_verdict(
     The panel prints the error above as well — redundancy on the page that
     explains it, rather than a dangling "see above" on the listing that does not.
     """
+    figures = {"published": published, "available": available, "loaded": loaded, "error": store_error}
+
     if loaded is None and available is None:
         if published is None:
-            return ("Nothing is published under this key and nothing is resident.", False)
+            return (
+                _("Nothing has been published for this area and nothing is loaded. %(action)s")
+                % {"action": NOTHING_TO_DO},
+                False,
+            )
         if store_error:
             return (
-                f"GeoRiva has published version {published} and the reader found no marker for "
-                f"it — but its listing is failing, so this figure proves nothing: {store_error}",
+                _(
+                    "GeoRiva published version %(published)s, but the forecast reader cannot list the bucket, "
+                    "so it cannot find it: %(error)s. %(action)s"
+                )
+                % {**figures, "action": CHECK_BUCKET},
                 False,
             )
         return (
-            f"GeoRiva has published version {published}; the reader's last successful listing of "
-            f"_forti/latest/ found no marker for it. The area is configured and off the air.",
+            _(
+                "GeoRiva published version %(published)s, but the forecast reader cannot find it on the "
+                "bucket, so this area is not being served. %(action)s"
+            )
+            % {**figures, "action": REPUBLISH},
             False,
         )
     if loaded is None:
-        return (f"Version {available} is on the bucket and nothing is resident yet.", False)
+        return (
+            _(
+                "Version %(available)s is on the bucket but not loaded yet. Wait for the next sync pass; "
+                "if it is still not loaded, check the rawdataforecaster logs."
+            )
+            % figures,
+            False,
+        )
     if available is None:
         # Resident, and the reader's marker map has no entry. It loaded from a
         # marker that is no longer there, so the process is serving data nothing
@@ -990,24 +1151,45 @@ def _area_verdict(
         # reading "no marker".
         if store_error:
             return (
-                f"Serving {loaded}, but the reader cannot list the store, so whether a marker "
-                f"still names that version is unknown: {store_error}",
+                _(
+                    "Serving version %(loaded)s, but the forecast reader cannot list the bucket, so whether "
+                    "that version is still there is unknown: %(error)s. %(action)s"
+                )
+                % {**figures, "action": CHECK_BUCKET},
                 False,
             )
         return (
-            f"Serving {loaded}, but the reader's last successful listing found no "
-            f"latest/ marker for this area. Nothing would load it again.",
+            _(
+                "Serving version %(loaded)s, but that version is no longer on the bucket, so it would not "
+                "load again after a restart. %(action)s"
+            )
+            % {**figures, "action": REPUBLISH},
             False,
         )
     if loaded < available:
-        return (f"Serving {loaded}; {available} is on the bucket and not loaded.", False)
+        return (
+            _(
+                "Serving version %(loaded)s, but the newer version %(available)s is on the bucket and not "
+                "loaded. Wait for the next sync pass; if it stays behind, restart the Forti services."
+            )
+            % figures,
+            False,
+        )
     if published is not None and loaded < published:
         return (
-            f"Serving {loaded}; GeoRiva has since published {published}, which the reader's last listing had not seen.",
+            _(
+                "Serving version %(loaded)s; GeoRiva has since published %(published)s, which the forecast "
+                "reader has not seen yet. %(action)s"
+            )
+            % {**figures, "action": WAIT_FOR_REFRESH},
             False,
         )
     if published is None:
-        return (f"Serving {loaded}, for an area no publication on this instance names.", False)
+        return (
+            _("Serving version %(loaded)s, but no publication on this instance uses this area any more. %(action)s")
+            % {**figures, "action": WAIT_FOR_REFRESH},
+            False,
+        )
     if loaded > published:
         # Resident *ahead* of the database. Everything above this line is the
         # reader lagging, which is the ordinary direction; this is the other
@@ -1018,11 +1200,19 @@ def _area_verdict(
         # publish, a second instance writing this area — the two facts disagree
         # and the column exists to say when they do.
         return (
-            f"Serving {loaded}, which is ahead of the {published} GeoRiva has published — "
-            f"the database has been rolled back, or something else is publishing this area.",
+            _(
+                "Serving version %(loaded)s, which is newer than the %(published)s GeoRiva published. The "
+                "database may have been restored from a backup, or another instance is publishing this "
+                "area. %(action)s"
+            )
+            % {**figures, "action": REPUBLISH},
             False,
         )
-    return (f"Serving {loaded}, the version GeoRiva published.", True)
+    return (
+        _("Serving version %(loaded)s, the version GeoRiva published. %(action)s")
+        % {**figures, "action": NOTHING_TO_DO},
+        True,
+    )
 
 
 def _reported_areas(state):
@@ -1101,13 +1291,24 @@ def _areas(state, publications) -> tuple[tuple[AreaRow, ...], str, str]:
             )
         )
 
-    detail = "" if rows else "The reader is configured with no areas."
+    detail = (
+        ""
+        if rows
+        else _("The forecast reader has no areas configured, so nothing is being served. Enable a publication.")
+    )
     return (tuple(rows), detail, store_error)
 
 
 # =============================================================================
 # The report
 # =============================================================================
+
+
+def _timed_out(deadline: float) -> str:
+    return _("The bucket did not answer within %(deadline)g seconds. %(action)s") % {
+        "deadline": deadline,
+        "action": CHECK_BUCKET,
+    }
 
 
 def deadline_seconds() -> float:
@@ -1143,7 +1344,7 @@ def resident_areas(*, sink=None, deadline: float | None = None) -> ResidentAreas
         deadline,
     )
     if reading is None:
-        return ResidentAreas(UNREACHABLE, detail=f"The bucket did not answer within {deadline:g} s.")
+        return ResidentAreas(UNREACHABLE, detail=_timed_out(deadline))
     if reading.presence == ABSENT:
         # ``_module`` is what turns "no document" into the sentence an operator
         # reads on the panel, and this must not be a second wording of it. Only
@@ -1185,7 +1386,7 @@ def report(*, sink=None, deadline: float | None = None) -> Report:
     readings = _guarded(lambda: _read_all(sink), deadline)
     answered = readings is not None
     if readings is None:
-        timed_out = f"The bucket did not answer within {deadline:g} s."
+        timed_out = _timed_out(deadline)
         readings = {
             "config": {spec.config_path: config.Current(UNREACHABLE, error=timed_out) for spec in CHAINS},
             "status": dict.fromkeys(

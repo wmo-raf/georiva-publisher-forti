@@ -121,7 +121,18 @@ class NotCutOverTests(PanelTestCase):
         report = verification.report(sink=self.sink())
 
         self.assertEqual(report.areas, ())
-        self.assertIn("never written a status file", report.areas_detail)
+        self.assertIn("has never reported its status", report.areas_detail)
+
+    def test_the_summary_counts_what_the_sections_show(self):
+        """The one line at the top is computed from the same fields the
+        sections render, so it can never say all is well over a red badge. Two
+        chains stopped at the bucket, no sync helper, and a forecast reader
+        that has never said which areas it holds: four problems, each with its
+        own sentence below."""
+        report = verification.report(sink=self.sink())
+
+        self.assertFalse(report.healthy)
+        self.assertEqual(report.problem_count, 4)
 
 
 class OutageTests(PanelTestCase):
@@ -205,7 +216,8 @@ class WithheldTests(PanelTestCase):
 
         self.assertEqual(chain.broken_at, "bucket")
         self.assertIn("could not be read", chain.verdict)
-        self.assertNotIn("has ever reached the pair", chain.verdict)
+        self.assertIn("Check the bucket connection", chain.verdict)
+        self.assertNotIn("has ever reached the Forti services", chain.verdict)
 
     def test_a_withheld_document_with_a_pair_still_running_is_not_a_fault(self):
         """An empty ``parameters`` map is fatal to jsonfrontend, so the right
@@ -222,7 +234,8 @@ class WithheldTests(PanelTestCase):
         chain = self.chain(verification.report(sink=self.sink()), JSONFORMAT)
 
         self.assertIsNone(chain.broken_at)
-        self.assertIn("correct outcome and not a stale one", chain.verdict)
+        self.assertIn("keep using the last file", chain.verdict)
+        self.assertIn("Nothing to do", chain.verdict)
 
 
 class AgreementTests(PanelTestCase):
@@ -241,6 +254,28 @@ class AgreementTests(PanelTestCase):
 
         self.assertIsNone(chain.broken_at)
         self.assertTrue(all(hop.agrees for hop in chain.hops[1:]))
+        self.assertIn("Nothing to do", chain.verdict)
+
+    def test_an_instance_serving_everything_is_healthy(self):
+        """Both chains carried, the one area resident at its published version,
+        the sidecar fine, the versions matching: the summary says so."""
+        from importlib.metadata import version
+
+        jsonformat = self.intended_sha(config.JSONFORMAT_PATH)
+        self.write_sidecar(
+            {RAWDATAFORECASTER: self.sha, JSONFORMAT: jsonformat},
+            compose_version=version("georiva-publisher-forti"),
+        )
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+        self.write_status(
+            verification.JSONFRONTEND_STATUS_PATH,
+            {"module": "jsonfrontend", "loaded_sha": jsonformat, "loaded_at": "2026-09-13T09:00:00Z", "ok": True},
+        )
+
+        report = verification.report(sink=self.sink())
+
+        self.assertEqual(report.problem_count, 0)
+        self.assertTrue(report.healthy)
 
     def test_agreement_is_against_the_first_hop_so_the_chain_says_where_it_broke(self):
         """Compared pairwise, one stale hop makes every hop after it disagree
@@ -255,6 +290,8 @@ class AgreementTests(PanelTestCase):
         self.assertTrue(chain.hops[1].agrees)
         self.assertFalse(chain.hops[2].agrees)
         self.assertFalse(chain.hops[3].agrees)
+        self.assertIn("The copy in the Forti config folder is a different file", chain.verdict)
+        self.assertIn("check the sidecar logs", chain.verdict)
 
     def test_a_volume_a_document_behind_is_told_apart_from_a_volume_with_no_document(self):
         """The distinction the plan asks for in as many words: hop 3 disagreeing
@@ -281,7 +318,8 @@ class AgreementTests(PanelTestCase):
         self.assertEqual(chain.hops[3].presence, REFUSED)
         self.assertFalse(chain.hops[3].agrees)
         self.assertEqual(chain.broken_at, "loaded")
-        self.assertIn("read and rejected", chain.verdict)
+        self.assertIn("rejected it", chain.verdict)
+        self.assertIn("Check the rawdataforecaster logs", chain.verdict)
 
 
 class StatusDocumentTests(PanelTestCase):
@@ -298,7 +336,7 @@ class StatusDocumentTests(PanelTestCase):
         hop = self.hop(verification.report(sink=self.sink()), "loaded", JSONFORMAT)
 
         self.assertEqual(hop.presence, FOREIGN)
-        self.assertIn("config/ and status/ share names", hop.detail)
+        self.assertIn("belongs to rawdataforecaster, not jsonfrontend", hop.detail)
 
     def test_a_sidecar_with_no_entry_for_a_document_is_a_different_compose_file(self):
         """The volume map always carries both documents — ``sha_of`` prints a
@@ -310,6 +348,7 @@ class StatusDocumentTests(PanelTestCase):
 
         self.assertEqual(hop.presence, FOREIGN)
         self.assertIn("different compose file", hop.detail)
+        self.assertIn("Update the compose file", hop.detail)
 
 
 class AreaTests(PanelTestCase):
@@ -352,6 +391,7 @@ class AreaTests(PanelTestCase):
 
         self.assertFalse(row.ok)
         self.assertIn("not loaded", row.verdict)
+        self.assertIn("restart the Forti services", row.verdict)
 
     def test_store_error_is_rendered_because_the_area_list_does_not_decay(self):
         """``available`` is the last listing that worked, so without the error a
@@ -373,7 +413,7 @@ class AreaTests(PanelTestCase):
         rows = self.areas()
 
         self.assertEqual([row.area for row in rows], [self.area])
-        self.assertIn("behind the area list", rows[0].verdict)
+        self.assertIn("not in the configuration", rows[0].verdict)
 
     def test_resident_with_no_marker_is_not_a_green_row(self):
         """It loaded from a marker that is no longer there, so it is serving data
@@ -385,8 +425,8 @@ class AreaTests(PanelTestCase):
         row = self.areas()[0]
 
         self.assertFalse(row.ok)
-        self.assertIn("no", row.verdict.lower())
-        self.assertIn("latest/ marker", row.verdict)
+        self.assertIn("no longer on the bucket", row.verdict)
+        self.assertIn("Re-publish this area", row.verdict)
 
     def test_resident_with_no_marker_and_a_failing_listing_says_it_cannot_tell(self):
         """``available`` does not decay, so a listing that is failing makes the
@@ -410,7 +450,8 @@ class AreaTests(PanelTestCase):
         report = verification.report(sink=self.sink())
 
         self.assertEqual(report.areas, ())
-        self.assertIn("M5.1's second fix", report.areas_detail)
+        self.assertIn("not reporting which areas", report.areas_detail)
+        self.assertIn("Update the compose file", report.areas_detail)
 
 
 class VersionTests(PanelTestCase):
@@ -434,6 +475,7 @@ class VersionTests(PanelTestCase):
 
         self.assertIs(versions.agree, False)
         self.assertIn("0.0.99", versions.detail)
+        self.assertIn("Update the compose file", versions.detail)
 
     def test_no_sidecar_is_nothing_to_compare_rather_than_a_mismatch(self):
         versions = verification.report(sink=self.sink()).versions
@@ -524,7 +566,7 @@ class ResidencyTests(PanelTestCase):
         self.assertEqual(residency.badge, "differs")
         self.assertEqual(residency.loaded, LATER)
         self.assertEqual(residency.published, PUBLISHED)
-        self.assertIn("ahead of", residency.detail)
+        self.assertIn("newer than", residency.detail)
 
     def test_a_published_area_the_reader_does_not_list_is_a_disagreement(self):
         """Not an absence. GeoRiva says it published; the process serving it has
@@ -535,7 +577,7 @@ class ResidencyTests(PanelTestCase):
 
         self.assertEqual(residency.badge, "differs")
         self.assertIsNone(residency.loaded)
-        self.assertIn("behind the area list", residency.detail)
+        self.assertIn("not in the configuration", residency.detail)
 
     def test_a_publication_that_has_never_published_is_nothing_yet(self):
         """Not a disagreement — there is nothing to disagree with. This is the
@@ -547,7 +589,7 @@ class ResidencyTests(PanelTestCase):
         residency = self.residency()
 
         self.assertEqual(residency.badge, ABSENT)
-        self.assertEqual(residency.badge_label, "not yet")
+        self.assertEqual(residency.badge_label, "not published yet")
 
     def test_no_status_document_is_the_readers_silence_not_the_publications(self):
         """Three states are ``ABSENT`` from Django's side and they are three
@@ -559,8 +601,8 @@ class ResidencyTests(PanelTestCase):
         residency = self.residency()
 
         self.assertEqual(residency.presence, ABSENT)
-        self.assertEqual(residency.badge_label, "no reader")
-        self.assertIn("never written a status file", residency.detail)
+        self.assertEqual(residency.badge_label, "no status")
+        self.assertIn("has never reported its status", residency.detail)
 
     def test_a_failing_read_is_could_not_read_rather_than_nothing_yet(self):
         """Collapsing these two reports an outage as an instance that has not
@@ -571,7 +613,7 @@ class ResidencyTests(PanelTestCase):
             residency = verification.resident_areas(sink=sink).of(self.publication)
 
         self.assertEqual(residency.presence, UNREACHABLE)
-        self.assertEqual(residency.badge_label, "could not read")
+        self.assertEqual(residency.badge_label, "unreachable")
         self.assertIn("connection refused", residency.detail)
 
     def test_a_bucket_that_does_not_answer_in_time_is_could_not_read(self):
@@ -599,7 +641,7 @@ class ResidencyTests(PanelTestCase):
         residency = self.residency()
 
         self.assertEqual(residency.presence, verification.UNREPORTED)
-        self.assertNotEqual(residency.badge_label, "not yet")
+        self.assertEqual(residency.badge_label, "unknown")
 
     def test_a_failing_listing_makes_a_missing_marker_unknowable(self):
         """``available`` does not decay, so the absence of a marker is unknown
@@ -614,7 +656,7 @@ class ResidencyTests(PanelTestCase):
         residency = self.residency()
 
         self.assertIn("unknown", residency.detail)
-        self.assertIn("listing", residency.detail)
+        self.assertIn("cannot list the bucket", residency.detail)
 
     def test_the_readers_store_error_is_not_quoted_to_an_organisation(self):
         """The error is the reader's own and instance-wide, and it quotes the

@@ -1,0 +1,839 @@
+# georiva-publisher-forti — message catalogue.
+#
+# English is the source language, so every msgstr here is empty on purpose: the
+# msgid is what renders. Copy this directory to locale/<lang>/LC_MESSAGES/ and
+# fill the msgstrs to translate. Regenerate after changing any user-facing text:
+#
+#   cd src/georiva_publisher_forti && django-admin makemessages -l en --no-obsolete -i "tests/*"
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: georiva-publisher-forti\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-19 11:25+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: templates/georiva_publisher_forti/inspect.html:118
+#: templates/georiva_publisher_forti/inspect.html:150 wagtail_hooks.py:314
+#: wagtail_hooks.py:520
+msgid "Variables"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:123
+msgid "Republish"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:130
+msgid "Forecast"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:132
+#, python-format
+msgid "The app fetches this forecast from /api/forecast/%(slug)s/."
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:145
+msgid "Readiness"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:152
+msgid ""
+"Which variable is published as each Forti parameter. Change them on the "
+"Variables page."
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:159
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:161
+msgid "Forti parameter"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:160
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:162
+msgid "Shown in the app as"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:161
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:163
+msgid "Variable"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:186
+msgid "Last publish"
+msgstr ""
+
+#: templates/georiva_publisher_forti/inspect.html:196
+msgid "History"
+msgstr ""
+
+#: templates/georiva_publisher_forti/mapping_page.html:14
+#, python-format
+msgid "Variables — %(slug)s"
+msgstr ""
+
+#: templates/georiva_publisher_forti/mapping_page.html:50
+msgid "Save"
+msgstr ""
+
+#: templates/georiva_publisher_forti/mapping_page.html:53
+msgid "Cancel"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:100
+msgid "Every publish and clean-up, newest first."
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:108
+msgid "When"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:109
+msgid "Action"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:110
+msgid "Outcome"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:111
+msgid "What it did"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:151
+#, python-format
+msgid "Showing the %(shown)s most recent of %(total)s."
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/publish_history.html:164
+msgid ""
+"Nothing has been published yet. Publishing starts automatically when a "
+"complete forecast run arrives."
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/readiness.html:89
+msgid ""
+"Whether this forecast can be published right now, and what is in the way if "
+"not."
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/readiness.html:102
+msgid "Check"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/readiness.html:103
+msgid "Answer"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/readiness.html:104
+msgid "State"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:152
+msgid ""
+"Choose which variable of the collection to publish as each Forti parameter. "
+"Rows were pre-filled where the names matched. Publishing waits until every "
+"row is set."
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:208
+msgid "What was checked"
+msgstr ""
+
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:212
+msgid "What was not checked"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:4
+#: wagtail_hooks.py:444 wagtail_hooks.py:470 wagtail_hooks.py:472
+msgid "Forecast serving status"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:185
+msgid ""
+"Is this instance serving point forecasts through Forti? Below is the path a "
+"configuration file takes from the GeoRiva database to the two Forti "
+"services, which areas are being served, and whether the services are healthy."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:190
+msgid ""
+"This page is read-only; change what is served from the publications list."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:196
+msgid "Everything is serving as intended."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:199
+#, python-format
+msgid "%(problems)s problem found — see below."
+msgid_plural "%(problems)s problems found — see below."
+msgstr[0] ""
+msgstr[1] ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:212
+#, python-format
+msgid ""
+"The bucket did not answer within %(deadline)s seconds, so every step past "
+"the first is marked unreachable. This does not mean nothing has been "
+"published. Check the bucket connection."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:228
+#, python-format
+msgid "Configuration file: %(document)s"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:230
+#, python-format
+msgid ""
+"Used by %(reader)s. Stored on the bucket as <code>_forti/%(path)s</code>."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:239
+msgid "Step"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:240
+msgid "Where the file is"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:241
+msgid "Compared with the database"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:252
+msgid "Checksum"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:274
+msgid "Areas being served"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:276
+msgid ""
+"Every area rawdataforecaster (the forecast reader) is configured to serve, "
+"and which version of each it has loaded."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:285
+msgid "The forecast reader cannot list the bucket:"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:289
+msgid ""
+"The versions below are from its last successful listing and may be out of "
+"date. Check the bucket connection; if the error names a broken object, "
+"remove that object."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:302
+msgid "Area"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:303
+msgid "Published by GeoRiva"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:304
+msgid "On the bucket"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:305
+msgid "Loaded"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:306
+msgid "Status"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:315
+msgid "No publication on this instance uses this area."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:322
+msgid "The forecast reader found no version of this area on the bucket."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:322
+#: templates/georiva_publisher_forti/verification_panel.html:329
+msgid "none"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:329
+msgid "The forecast reader has not loaded any version of this area."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:336
+msgid "serving"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:336
+msgid "not serving"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:358
+msgid "Forti services"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:360
+msgid ""
+"The two Forti services, and the sync helper (sidecar) that copies "
+"configuration files to them and their status back to the bucket."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:370
+msgid ""
+"The sync helper ran but could not finish its last pass, so the Forti "
+"services may be running on old configuration. Check the sidecar logs."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:378
+msgid "Sync helper last ran"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:382
+msgid "Runs every"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:383
+#, python-format
+msgid "%(seconds)s seconds"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:386
+msgid "Configuration copied in"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:387
+#: templates/georiva_publisher_forti/verification_panel.html:391
+msgid "yes,no,unknown"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:390
+msgid "Status copied out"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:402
+msgid "Service"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:403
+msgid "Last loaded configuration"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:404
+msgid "Result"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:405
+msgid "Details"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:421
+#: verification.py:267
+msgid "no status"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:423
+msgid "loaded"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:425
+#: verification.py:265
+msgid "rejected"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:437
+#, python-format
+msgid ""
+"Loaded, but these settings only take effect after a restart: %(fields)s. "
+"Restart the Forti services."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:443
+msgid "Applied:"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:460
+msgid "Versions"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:462
+msgid ""
+"The compose file that runs the Forti services must match the installed "
+"plugin."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:467
+msgid "Running compose file"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:471
+msgid "Installed plugin"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:475
+msgid "Match"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:476
+msgid "yes,no,cannot tell"
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:484
+#, python-format
+msgid "Checked at %(read_at)s — reload the page to check again."
+msgstr ""
+
+#: templates/georiva_publisher_forti/verification_panel.html:487
+msgid "How this page works"
+msgstr ""
+
+#: verification.py:104
+msgid "the forecast reader"
+msgstr ""
+
+#: verification.py:105
+msgid "the API front end"
+msgstr ""
+
+#: verification.py:106
+msgid "the sync helper"
+msgstr ""
+
+#: verification.py:109
+msgid "Wait for the next refresh (up to 5 minutes)."
+msgstr ""
+
+#: verification.py:110
+msgid "Re-publish this area."
+msgstr ""
+
+#: verification.py:111
+msgid "Check the bucket connection."
+msgstr ""
+
+#: verification.py:112
+msgid "Update the compose file to the tag for this plugin version."
+msgstr ""
+
+#: verification.py:113
+msgid "Nothing to do."
+msgstr ""
+
+#: verification.py:124
+#, python-format
+msgid "Check the %(module)s logs."
+msgstr ""
+
+#: verification.py:169
+msgid ""
+"This area is not in the configuration the forecast reader is running, so "
+"nothing would load it. Wait for the next refresh (up to 5 minutes); if it is "
+"still missing, restart the Forti services."
+msgstr ""
+
+#: verification.py:178
+msgid ""
+"rawdataforecaster (the forecast reader) is not reporting which areas it has "
+"loaded, because the version running is too old to say. Update the compose "
+"file to the tag for this plugin version."
+msgstr ""
+
+#: verification.py:188
+msgid ""
+"the forecast reader cannot list the bucket (the instance admin can see why "
+"under Settings → Forecast serving status)"
+msgstr ""
+
+#: verification.py:258
+msgid "source"
+msgstr ""
+
+#: verification.py:259
+msgid "matches"
+msgstr ""
+
+#: verification.py:260
+msgid "differs"
+msgstr ""
+
+#: verification.py:261
+msgid "missing"
+msgstr ""
+
+#: verification.py:262
+msgid "unreachable"
+msgstr ""
+
+#: verification.py:263
+msgid "not needed"
+msgstr ""
+
+#: verification.py:264
+msgid "wrong file"
+msgstr ""
+
+#: verification.py:266
+msgid "unknown"
+msgstr ""
+
+#: verification.py:431
+msgid "not published yet"
+msgstr ""
+
+#: verification.py:493
+msgid ""
+"Nothing has been published for this area yet, so nothing is loaded. Nothing "
+"to do."
+msgstr ""
+
+#: verification.py:561
+#, python-format
+msgid ""
+"The sync helper copies files every %(interval)s seconds and last ran %(age)s."
+msgstr ""
+
+#: verification.py:563
+msgid "at an unknown time"
+msgstr ""
+
+#: verification.py:674
+#, python-format
+msgid "%(path)s is not a valid status file. %(action)s"
+msgstr ""
+
+#: verification.py:682
+#, python-format
+msgid ""
+"%(path)s belongs to %(found)s, not %(module)s, so it was not read. %(action)s"
+msgstr ""
+
+#: verification.py:750
+msgid "in the future"
+msgstr ""
+
+#: verification.py:752
+#, python-format
+msgid "%(n)d seconds ago"
+msgstr ""
+
+#: verification.py:754
+#, python-format
+msgid "%(n)d minutes ago"
+msgstr ""
+
+#: verification.py:756
+#, python-format
+msgid "%(n)d hours ago"
+msgstr ""
+
+#: verification.py:757
+#, python-format
+msgid "%(n)d days ago"
+msgstr ""
+
+#: verification.py:773
+msgid ""
+"The sync helper (sidecar) has never reported to this bucket, so the Forti "
+"services have probably never been started against it. Start the Forti "
+"services."
+msgstr ""
+
+#: verification.py:799
+#, python-format
+msgid ""
+"%(module)s has never reported its status to this bucket. Start the Forti "
+"services."
+msgstr ""
+
+#: verification.py:828
+msgid ""
+"The sync helper has not reported which compose file is running, so there is "
+"nothing to compare."
+msgstr ""
+
+#: verification.py:838
+#, python-format
+msgid ""
+"The running compose file is version %(compose)s but the installed plugin is "
+"%(plugin)s. %(action)s"
+msgstr ""
+
+#: verification.py:849
+msgid "1. Database"
+msgstr ""
+
+#: verification.py:850
+msgid "GeoRiva's database — the source"
+msgstr ""
+
+#: verification.py:860
+#, python-format
+msgid ""
+"No enabled publication needs a %(document)s, so GeoRiva does not write one "
+"and leaves the copy on the bucket as it is. %(action)s"
+msgstr ""
+
+#: verification.py:868
+msgid "2. Bucket"
+msgstr ""
+
+#: verification.py:869
+#, python-format
+msgid "_forti/%(path)s on the bucket"
+msgstr ""
+
+#: verification.py:878
+#, python-format
+msgid "No file on the bucket yet. %(action)s"
+msgstr ""
+
+#: verification.py:884
+msgid "3. Config folder"
+msgstr ""
+
+#: verification.py:885
+#, python-format
+msgid "/config/%(document)s inside the Forti services"
+msgstr ""
+
+#: verification.py:898
+#, python-format
+msgid ""
+"The sync helper's status does not mention %(document)s, so it was written by "
+"a different compose file. %(action)s"
+msgstr ""
+
+#: verification.py:913
+#, python-format
+msgid ""
+"The sync helper has not copied this file yet because there was nothing on "
+"the bucket to copy. %(action)s"
+msgstr ""
+
+#: verification.py:920
+msgid "4. Loaded"
+msgstr ""
+
+#: verification.py:921
+#, python-format
+msgid "what %(module)s has loaded"
+msgstr ""
+
+#: verification.py:933
+#, python-format
+msgid ""
+"%(module)s reported its status but could not read the file at all: "
+"%(errors)s. %(action)s"
+msgstr ""
+
+#: verification.py:934 verification.py:948 verification.py:1047
+msgid "no reason given"
+msgstr ""
+
+#: verification.py:945
+#, python-format
+msgid ""
+"%(module)s read the file and rejected it, so it is still using its previous "
+"configuration: %(errors)s. %(action)s"
+msgstr ""
+
+#: verification.py:987
+msgid "The copy on the bucket"
+msgstr ""
+
+#: verification.py:988
+msgid "The copy in the Forti config folder"
+msgstr ""
+
+#: verification.py:989
+#, python-format
+msgid "The copy loaded by %(module)s"
+msgstr ""
+
+#: verification.py:997
+msgid ""
+"Wait for the next sync pass; if it stays different, check the sidecar logs."
+msgstr ""
+
+#: verification.py:998
+msgid ""
+"Wait for the next sync pass; if it stays different, restart the Forti "
+"services."
+msgstr ""
+
+#: verification.py:1011
+#, python-format
+msgid ""
+"GeoRiva has nothing new to write for %(document)s, so the Forti services "
+"keep using the last file they received. %(action)s"
+msgstr ""
+
+#: verification.py:1025
+#, python-format
+msgid ""
+"GeoRiva has nothing new to write for %(document)s, and %(subject)s could not "
+"be read, so it is unknown which file the Forti services are using. %(action)s"
+msgstr ""
+
+#: verification.py:1033
+#, python-format
+msgid ""
+"GeoRiva has nothing new to write for %(document)s, and no file has ever "
+"reached the Forti services. Nothing to do until a publication is enabled."
+msgstr ""
+
+#: verification.py:1046
+#, python-format
+msgid "%(subject)s could not be read: %(error)s. %(action)s"
+msgstr ""
+
+#: verification.py:1055
+#, python-format
+msgid "%(subject)s is a different file from the one in the database."
+msgstr ""
+
+#: verification.py:1065
+#, python-format
+msgid "%(subject)s: %(detail)s"
+msgstr ""
+
+#: verification.py:1068
+#, python-format
+msgid "Every step has the same %(document)s as the database. %(action)s"
+msgstr ""
+
+#: verification.py:1116
+#, python-format
+msgid ""
+"Nothing has been published for this area and nothing is loaded. %(action)s"
+msgstr ""
+
+#: verification.py:1123
+#, python-format
+msgid ""
+"GeoRiva published version %(published)s, but the forecast reader cannot list "
+"the bucket, so it cannot find it: %(error)s. %(action)s"
+msgstr ""
+
+#: verification.py:1131
+#, python-format
+msgid ""
+"GeoRiva published version %(published)s, but the forecast reader cannot find "
+"it on the bucket, so this area is not being served. %(action)s"
+msgstr ""
+
+#: verification.py:1140
+#, python-format
+msgid ""
+"Version %(available)s is on the bucket but not loaded yet. Wait for the next "
+"sync pass; if it is still not loaded, check the rawdataforecaster logs."
+msgstr ""
+
+#: verification.py:1155
+#, python-format
+msgid ""
+"Serving version %(loaded)s, but the forecast reader cannot list the bucket, "
+"so whether that version is still there is unknown: %(error)s. %(action)s"
+msgstr ""
+
+#: verification.py:1163
+#, python-format
+msgid ""
+"Serving version %(loaded)s, but that version is no longer on the bucket, so "
+"it would not load again after a restart. %(action)s"
+msgstr ""
+
+#: verification.py:1172
+#, python-format
+msgid ""
+"Serving version %(loaded)s, but the newer version %(available)s is on the "
+"bucket and not loaded. Wait for the next sync pass; if it stays behind, "
+"restart the Forti services."
+msgstr ""
+
+#: verification.py:1181
+#, python-format
+msgid ""
+"Serving version %(loaded)s; GeoRiva has since published %(published)s, which "
+"the forecast reader has not seen yet. %(action)s"
+msgstr ""
+
+#: verification.py:1189
+#, python-format
+msgid ""
+"Serving version %(loaded)s, but no publication on this instance uses this "
+"area any more. %(action)s"
+msgstr ""
+
+#: verification.py:1204
+#, python-format
+msgid ""
+"Serving version %(loaded)s, which is newer than the %(published)s GeoRiva "
+"published. The database may have been restored from a backup, or another "
+"instance is publishing this area. %(action)s"
+msgstr ""
+
+#: verification.py:1212
+#, python-format
+msgid "Serving version %(loaded)s, the version GeoRiva published. %(action)s"
+msgstr ""
+
+#: verification.py:1297
+msgid ""
+"The forecast reader has no areas configured, so nothing is being served. "
+"Enable a publication."
+msgstr ""
+
+#: verification.py:1308
+#, python-format
+msgid "The bucket did not answer within %(deadline)g seconds. %(action)s"
+msgstr ""
+
+#: wagtail_hooks.py:254
+msgid "Yes"
+msgstr ""
+
+#: wagtail_hooks.py:254
+msgid "No"
+msgstr ""
+
+#: wagtail_hooks.py:298
+msgid "Resident"
+msgstr ""
+
+#: wagtail_hooks.py:469 wagtail_hooks.py:517
+msgid "Home"
+msgstr ""
+
+#: wagtail_hooks.py:510
+#, python-format
+msgid "The variables of %s are saved."
+msgstr ""
+
+#: wagtail_hooks.py:518
+msgid "Forti publications"
+msgstr ""
+
+#: wagtail_hooks.py:522
+#, python-format
+msgid "Variables — %s"
+msgstr ""
+
+#: wagtail_hooks.py:552
+#, python-format
+msgid "%s will be republished within a few minutes."
+msgstr ""
+
+#: wagtail_hooks.py:556
+#, python-format
+msgid "%s is being published right now — try again once it finishes."
+msgstr ""

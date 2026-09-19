@@ -102,13 +102,51 @@ class PanelRenderTests(TemporarySinkMixin, TestCase):
         self.assertContains(response, "rawdataforecaster.json")
         self.assertContains(response, "jsonformat.json")
 
-    def test_the_empty_state_says_not_yet_rather_than_could_not_read(self):
+    def test_the_empty_state_says_missing_rather_than_unreachable(self):
         """Both are "no sha" from here, and only one of them is somebody's
-        afternoon. The bucket is reachable in this test and empty."""
+        afternoon. The bucket is reachable in this test and empty. Asserted on
+        the badge's own markup, because the stylesheet names the state too."""
         response = self.client.get(self.url)
 
-        self.assertContains(response, "not yet")
-        self.assertNotContains(response, "could not read")
+        self.assertContains(response, ">missing</span>")
+        self.assertNotContains(response, ">unreachable</span>")
+
+    def test_the_page_is_named_for_what_it_answers(self):
+        """ "Forti" means nothing to an operator until they have read the README,
+        so the title says what the page is and the lead says what Forti is."""
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Forecast serving status")
+        self.assertContains(response, "through Forti")
+
+    def test_an_instance_that_is_not_serving_counts_its_problems_at_the_top(self):
+        """The one line most operators will read. Nothing is published and the
+        pair has never run, so the summary must not say all is well."""
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "problems found")
+        self.assertNotContains(response, "Everything is serving as intended")
+
+    def test_every_sentence_names_an_action_or_says_there_is_none(self):
+        """State, then what to do. Each verdict on the fresh instance ends in
+        one of the actions an operator can actually take."""
+        from georiva_publisher_forti import verification
+
+        report = verification.report()
+        actions = (
+            "Wait for",
+            "Re-publish",
+            "restart the Forti services",
+            "Start the Forti services",
+            "Check the",
+            "Update the compose file",
+            "Nothing to do",
+            "Enable a publication",
+        )
+
+        for sentence in [chain.verdict for chain in report.chains] + [report.areas_detail, report.sidecar.detail]:
+            with self.subTest(sentence=sentence):
+                self.assertTrue(any(action in sentence for action in actions), sentence)
 
     def test_every_organisation_area_key_is_on_the_one_page(self):
         """The leak the access rule closes, demonstrated rather than asserted in
@@ -207,7 +245,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, f">{PUBLISHED}</span>", count=1)
-        self.assertContains(response, "agrees")
+        self.assertContains(response, ">matches</span>")
 
     def test_a_resident_version_behind_the_published_one_is_told_apart_from_agreement(self):
         """Published and resident become two facts rather than one assumed to
@@ -217,8 +255,8 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         response = self.client.get(self.url)
 
-        self.assertContains(response, "differs")
-        self.assertNotContains(response, "agrees")
+        self.assertContains(response, ">differs</span>")
+        self.assertNotContains(response, ">matches</span>")
         # The two figures differ here, so each can be asserted on its own: the
         # resident version renders in the cell, and the published one it
         # disagrees with is still in the row beside it.
@@ -234,7 +272,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "agrees")
+        self.assertContains(response, ">matches</span>")
         self.assertNotEqual(self.client.get(reverse("forti_verification_panel")).status_code, 200)
 
     def test_another_organisations_residency_does_not_reach_this_listing(self):
@@ -275,9 +313,9 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         with patch.object(type(sink), "exists", side_effect=OSError("connection refused")):
             response = self.client.get(self.url)
 
-        self.assertContains(response, "could not read")
-        self.assertNotContains(response, "not yet")
-        self.assertNotContains(response, "no reader")
+        self.assertContains(response, ">unreachable</span>")
+        self.assertNotContains(response, ">not published yet</span>")
+        self.assertNotContains(response, ">no status</span>")
 
     def test_a_publication_that_has_never_published_is_nothing_yet(self):
         self.publication.published_version = None
@@ -287,8 +325,8 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
 
         response = self.client.get(self.url)
 
-        self.assertContains(response, "not yet")
-        self.assertNotContains(response, "could not read")
+        self.assertContains(response, ">not published yet</span>")
+        self.assertNotContains(response, ">unreachable</span>")
 
     def test_every_row_is_served_by_one_status_read(self):
         """The document lists every area at once. A read per row would put the
@@ -327,19 +365,19 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         elapsed = time.monotonic() - began
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "could not read")
+        self.assertContains(response, ">unreachable</span>")
         self.assertLess(elapsed, 2.0)
 
     def test_a_reader_that_has_never_reported_is_not_a_publication_that_has_not(self):
         """Nothing written under ``status/`` at all. The publication *has*
-        published, so "not yet" would point the operator at their own model for
-        a process that is not running."""
+        published, so "not published yet" would point the operator at their own
+        model for a process that is not running."""
         self.sign_in()
 
         response = self.client.get(self.url)
 
-        self.assertContains(response, "no reader")
-        self.assertNotContains(response, "could not read")
+        self.assertContains(response, ">no status</span>")
+        self.assertNotContains(response, ">unreachable</span>")
 
     def test_the_results_partial_carries_the_column_too(self):
         """Wagtail builds ``results/`` from the same ``index_view_class``
@@ -353,7 +391,7 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         response = self.client.get(f"{self.url}results/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "agrees")
+        self.assertContains(response, ">matches</span>")
         self.assertContains(response, str(PUBLISHED))
 
     def test_a_listing_with_no_rows_does_not_touch_object_storage(self):
@@ -379,10 +417,10 @@ class PublicationIndexResidencyTests(TemporarySinkMixin, TestCase):
         write_forecaster(areas=[{"area": self.area, "available": BEHIND, "loaded": BEHIND}])
         self.sign_in()
 
-        self.assertContains(self.client.get(self.url), "differs")
+        self.assertContains(self.client.get(self.url), ">differs</span>")
         write_forecaster(areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
 
-        self.assertContains(self.client.get(self.url), "agrees")
+        self.assertContains(self.client.get(self.url), ">matches</span>")
 
 
 class PublicationHistoryTests(TestCase):
