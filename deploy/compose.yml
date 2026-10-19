@@ -83,7 +83,11 @@ services:
   # landed in the volume, which is the one hop of M5.8's four that nothing else
   # can report.
   forti-config-sync:
-    image: ${FORTI_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z}
+    # Silo's `mc`, at the release tag core pins its Silo object store to
+    # (`b6dd116`). The `minio/mc` repository this was first pinned to is gone
+    # from Docker Hub, every tag of it, so the old default failed at pull with
+    # "not found".
+    image: ${FORTI_MC_IMAGE:-pgsty/mc:RELEASE.2026-09-16T00-00-00Z}
     restart: unless-stopped
     # A `configs:` entry with inline content lands read-only, mode 0444 — it is
     # not executable and no `chmod` runs anywhere. Naming the interpreter is
@@ -277,7 +281,7 @@ configs:
 
       # DOWN. One named document, with the token it must contain.
       #
-      # `minio/mc` carries no `cmp`, so there is no cheap way to ask whether
+      # The `mc` image carries no `cmp`, so there is no cheap way to ask whether
       # the bytes changed and the file is renamed into place on every pass
       # rather than only on a change. That costs nothing: configwatch stats
       # size and mtime and only then compares the digest
