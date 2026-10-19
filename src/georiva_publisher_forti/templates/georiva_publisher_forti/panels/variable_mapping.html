@@ -105,6 +105,22 @@
         max-width: 40em;
     }
 
+    .fm-offer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6em 1em;
+        align-items: center;
+        margin: 0 0 1.2em;
+        padding: 0.7em 1em;
+        border: 1px solid var(--w-color-border-furniture);
+        border-radius: 3px;
+        max-width: 48em;
+    }
+
+    .fm-offer p {
+        margin: 0;
+    }
+
     .fm-ack {
         margin: 1.2em 0 0;
         padding: 0.9em 1em;
@@ -154,6 +170,22 @@
         pre-filled where the names matched. Publishing waits until every row is set.
     {% endblocktrans %}
 </p>
+
+{% comment %}
+    The slug match, offered and not applied. Rendered only when it would fill
+    something — `form.offer` is None otherwise — because a button that fills
+    no row reads as one that is broken. The sentence names every row it would
+    fill, and the button is a second submit of this same form: taking the offer
+    is a save, with the same refusals and warnings as the Save below.
+{% endcomment %}
+{% if offer %}
+    <div class="fm-offer">
+        <p>{{ offer.sentence }}</p>
+        <button type="submit" name="{{ offer.field_name }}" value="1" class="button button-small button-secondary">
+            {{ offer.label }}
+        </button>
+    </div>
+{% endif %}
 
 <table class="fm-table">
     <thead>

@@ -525,6 +525,7 @@ def mapping_page(request, publication_pk):
         "form": form,
         "rows": form.mapping_rows(),
         "acknowledgement": form.acknowledgement,
+        "offer": form.offer,
         "incomplete_label": forms.INCOMPLETE_LABEL,
         "checks_made": forms.CHECKS_MADE,
         "checks_not_made": forms.CHECKS_NOT_MADE,

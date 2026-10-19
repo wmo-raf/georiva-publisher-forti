@@ -479,6 +479,194 @@ class GenerationTests(MappingEditorMixin, TestCase):
         self.assertEqual(self.publication.status, FortiPublication.Status.STALE)
 
 
+class MatchOfferTests(MappingEditorMixin, TestCase):
+    """The slug match, offered on a blank slot and applied only when asked.
+
+    A publication configured before its collection declared its variables keeps
+    its blank rows: ADR 0004 re-matches nothing, because a blank row is an edit
+    like any other. When the variables arrive conventionally named, the page
+    offers the match instead — naming the rows it would fill — and applying it is
+    an ordinary save, with every refusal and warning an ordinary save has.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Blanked by update rather than through the form: this is the state a
+        # publication seeded ahead of its variables is in, and reaching it
+        # through the form would raise the generation the tests below count.
+        self.publication.variable_mappings.filter(slot__in=["2t", "tcc"]).update(variable=None)
+
+    def apply(self, **kwargs):
+        return self.post(**{forms.TAKE_OFFER_FIELD: "1", **kwargs})
+
+    def offer(self):
+        return self.client.get(self.url).context["form"].offer
+
+    def variable_like(self, slug, like):
+        """A ninth variable in the unit of one of the eight, and not named after
+        any slot — so nothing offers it, and only a hand can put it in a row."""
+        return Variable.objects.create(
+            collection=self.collection,
+            slug=slug,
+            name=slug,
+            unit=self.variable(like).unit,
+            value_min=-100,
+            value_max=2000,
+        )
+
+    def rename_both_matches(self):
+        """The collection names its variables its own way after all."""
+        Variable.objects.filter(pk=self.variable("2t").pk).update(slug="temperature-2m")
+        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+
+    def in_kelvin(self, slug):
+        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
+        Variable.objects.filter(pk=self.variable(slug).pk).update(unit=kelvin)
+
+    def test_the_offer_names_the_blank_slots_it_would_fill(self):
+        response = self.client.get(self.url)
+        offer = response.context["form"].offer
+
+        self.assertEqual(offer.slots, ("2t", "tcc"))
+        self.assertIn("2t and tcc", offer.sentence)
+        self.assertContains(response, offer.sentence)
+        self.assertContains(response, forms.TAKE_OFFER_FIELD)
+
+    def test_there_is_no_offer_when_every_slot_is_filled(self):
+        self.publication.variable_mappings.filter(slot="2t").update(variable=self.variable("2t"))
+        self.publication.variable_mappings.filter(slot="tcc").update(variable=self.variable("tcc"))
+
+        response = self.client.get(self.url)
+
+        self.assertIsNone(response.context["form"].offer)
+        self.assertNotContains(response, forms.TAKE_OFFER_FIELD)
+
+    def test_there_is_no_offer_when_no_blank_slot_has_a_match(self):
+        """A collection naming its variables its own way is exactly what the
+        match cannot help with, and a button that fills nothing reads as broken."""
+        self.rename_both_matches()
+
+        response = self.client.get(self.url)
+
+        self.assertIsNone(response.context["form"].offer)
+        self.assertNotContains(response, forms.TAKE_OFFER_FIELD)
+
+    def test_a_match_in_the_wrong_unit_is_not_offered(self):
+        """Offered, it could only be refused — and a refusal on applying refuses
+        the whole save, the rows that would have been fine with it. An offer
+        that cannot succeed as offered is a button that reads as broken."""
+        self.in_kelvin("2t")
+
+        self.assertEqual(self.offer().slots, ("tcc",))
+
+    def test_there_is_no_offer_when_every_match_is_in_the_wrong_unit(self):
+        self.in_kelvin("2t")
+        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+
+        self.assertIsNone(self.offer())
+
+    def test_applying_it_leaves_a_wrong_unit_match_blank(self):
+        self.in_kelvin("2t")
+
+        self.assertEqual(self.apply().status_code, 302)
+
+        self.assertIsNone(self.stored("2t"))
+        self.assertEqual(self.stored("tcc"), self.variable("tcc"))
+
+    def test_applying_it_fills_the_blank_slots(self):
+        response = self.apply()
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.stored("2t"), self.variable("2t"))
+        self.assertEqual(self.stored("tcc"), self.variable("tcc"))
+
+    def test_applying_it_never_overwrites_a_filled_slot(self):
+        """Filled with a variable whose slug is not the slot's — the case a
+        re-match would most plausibly "correct", and the one it must not."""
+        dewpoint = self.variable_like("dewpoint", like="2d")
+        self.publication.variable_mappings.filter(slot="2d").update(variable=dewpoint)
+
+        self.assertEqual(self.offer().slots, ("2t", "tcc"))
+        self.assertEqual(self.apply().status_code, 302)
+        self.assertEqual(self.stored("2d"), dewpoint)
+
+    def test_a_slot_chosen_on_the_page_is_not_overwritten_by_applying(self):
+        """Blank when the page was rendered, chosen before the button was
+        pressed: the choice is the newer decision."""
+        chosen = self.variable_like("air-temperature", like="2t")
+
+        self.apply(**{forms.field_name("2t"): chosen.pk})
+
+        self.assertEqual(self.stored("2t"), chosen)
+        self.assertEqual(self.stored("tcc"), self.variable("tcc"))
+
+    def test_a_slot_with_no_match_stays_blank_and_incomplete(self):
+        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+
+        self.assertEqual(self.apply().status_code, 302)
+
+        self.assertEqual(self.stored("2t"), self.variable("2t"))
+        self.assertIsNone(self.stored("tcc"))
+        self.assertContains(self.client.get(self.url), forms.INCOMPLETE_LABEL)
+
+    def test_applying_it_raises_the_generation_once_per_slot_it_moved(self):
+        self.apply()
+        self.publication.refresh_from_db()
+
+        self.assertEqual(self.publication.generation, 2)
+
+    def test_applying_it_with_nothing_to_fill_raises_nothing(self):
+        self.rename_both_matches()
+
+        self.assertEqual(self.apply().status_code, 302)
+        self.publication.refresh_from_db()
+
+        self.assertEqual(self.publication.generation, 0)
+
+    def test_the_unit_refusal_still_applies(self):
+        """To the rows chosen by hand on the same submit: taking the offer is a
+        save, and a save refuses a wrong unit wherever it came from."""
+        by_hand = self.variable_like("t2m-kelvin", like="2t")
+        self.in_kelvin("t2m-kelvin")
+
+        response = self.apply(**{forms.field_name("2t"): by_hand.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(forms.field_name("2t"), response.context["form"].errors)
+        self.assertIsNone(self.stored("2t"))
+        self.assertIsNone(self.stored("tcc"))
+
+    def test_the_warnings_and_the_acknowledgement_still_apply(self):
+        Variable.objects.filter(pk=self.variable("2t").pk).update(value_min=200.0, value_max=320.0)
+
+        response = self.apply()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(forms.ACKNOWLEDGE_FIELD, response.context["form"].errors)
+        self.assertIsNone(self.stored("2t"))
+
+        response = self.apply(acknowledge=True)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.stored("2t"), self.variable("2t"))
+
+    def test_a_refused_application_shows_the_rows_it_filled(self):
+        """So the acknowledgement is given for the mapping on the page, and the
+        plain Save that follows it posts what was offered."""
+        Variable.objects.filter(pk=self.variable("2t").pk).update(value_min=200.0, value_max=320.0)
+
+        form = self.apply().context["form"]
+
+        self.assertEqual(str(form[forms.field_name("2t")].value()), str(self.variable("2t").pk))
+
+    def test_an_ordinary_save_re_matches_nothing(self):
+        """ADR 0004: a blank row left blank stays blank. Only the button fills."""
+        self.assertEqual(self.post().status_code, 302)
+
+        self.assertIsNone(self.stored("2t"))
+        self.assertIsNone(self.stored("tcc"))
+
+
 class CollectionChangeTests(MappingEditorMixin, TestCase):
     """A filled mapping is the collection's, and cannot follow it elsewhere.
 

@@ -611,8 +611,9 @@ class FortiPublication(BuildDisciplinedModel):
         Only the *absent* slots, which after the first call is none of them. A
         row that exists and is blank stays blank — re-matching it would undo the
         edit at the next save, and a publication configured ahead of the
-        collection that will fill it is therefore filled in by hand rather than
-        re-matched later. The README gives the shell for it; #13 gives the form.
+        collection that will fill it is never re-matched behind anybody's back.
+        The mapping page offers the match instead (#22), and an operator applies
+        it — see :func:`~.mapping.fillable`.
 
         Written with ``bulk_create``, which is not an optimisation — it is what
         keeps seeding from going through

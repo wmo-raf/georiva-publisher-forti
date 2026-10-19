@@ -240,9 +240,14 @@ row.save()
 ```
 
 A publication created before its collection declares its variables is seeded with
-eight blank rows, and they are **not** re-matched later — auto-match runs once, at
-creation, because re-running it would undo a deliberate edit. Such a publication
-is filled in by hand, as above.
+eight blank rows, and they are **not** re-matched silently — auto-match runs once, at
+creation, because re-running it would undo a deliberate edit. Once the variables
+arrive, the mapping page **offers** the match instead: it names the blank rows a
+same-named variable could fill, and *Fill these rows and save* applies it. That is
+an ordinary save — the unit refusal, the warnings and the acknowledgement all
+apply, and the generation rises once per row it filled. A filled row is never
+offered, whatever its slug; neither is a match in the wrong unit, which the save
+would only refuse; and the offer is absent when it would fill nothing.
 
 Changing a mapping **raises the generation and marks the publication stale**, so
 the next publish outranks the last and the sweep picks it up within five minutes
