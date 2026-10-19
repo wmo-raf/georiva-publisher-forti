@@ -497,15 +497,40 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
         self.publication.variable_mappings.filter(slot__in=["2t", "tcc"]).update(variable=None)
 
     def apply(self, **kwargs):
-        return self.post(**{forms.APPLY_MATCHES_FIELD: "1", **kwargs})
+        return self.post(**{forms.TAKE_OFFER_FIELD: "1", **kwargs})
+
+    def offer(self):
+        return self.client.get(self.url).context["form"].offer
+
+    def variable_like(self, slug, like):
+        """A ninth variable in the unit of one of the eight, and not named after
+        any slot — so nothing offers it, and only a hand can put it in a row."""
+        return Variable.objects.create(
+            collection=self.collection,
+            slug=slug,
+            name=slug,
+            unit=self.variable(like).unit,
+            value_min=-100,
+            value_max=2000,
+        )
+
+    def rename_both_matches(self):
+        """The collection names its variables its own way after all."""
+        Variable.objects.filter(pk=self.variable("2t").pk).update(slug="temperature-2m")
+        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+
+    def in_kelvin(self, slug):
+        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
+        Variable.objects.filter(pk=self.variable(slug).pk).update(unit=kelvin)
 
     def test_the_offer_names_the_blank_slots_it_would_fill(self):
         response = self.client.get(self.url)
+        offer = response.context["form"].offer
 
-        self.assertEqual(list(response.context["form"].offer), ["2t", "tcc"])
-        self.assertContains(response, forms.APPLY_MATCHES_FIELD)
-        self.assertContains(response, response.context["form"].offer_sentence)
-        self.assertIn("2t and tcc", response.context["form"].offer_sentence)
+        self.assertEqual(offer.slots, ("2t", "tcc"))
+        self.assertIn("2t and tcc", offer.sentence)
+        self.assertContains(response, offer.sentence)
+        self.assertContains(response, forms.TAKE_OFFER_FIELD)
 
     def test_there_is_no_offer_when_every_slot_is_filled(self):
         self.publication.variable_mappings.filter(slot="2t").update(variable=self.variable("2t"))
@@ -513,19 +538,40 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.context["form"].offer, {})
-        self.assertNotContains(response, forms.APPLY_MATCHES_FIELD)
+        self.assertIsNone(response.context["form"].offer)
+        self.assertNotContains(response, forms.TAKE_OFFER_FIELD)
 
     def test_there_is_no_offer_when_no_blank_slot_has_a_match(self):
         """A collection naming its variables its own way is exactly what the
         match cannot help with, and a button that fills nothing reads as broken."""
-        Variable.objects.filter(pk=self.variable("2t").pk).update(slug="temperature-2m")
-        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+        self.rename_both_matches()
 
         response = self.client.get(self.url)
 
-        self.assertEqual(response.context["form"].offer, {})
-        self.assertNotContains(response, forms.APPLY_MATCHES_FIELD)
+        self.assertIsNone(response.context["form"].offer)
+        self.assertNotContains(response, forms.TAKE_OFFER_FIELD)
+
+    def test_a_match_in_the_wrong_unit_is_not_offered(self):
+        """Offered, it could only be refused — and a refusal on applying refuses
+        the whole save, the rows that would have been fine with it. An offer
+        that cannot succeed as offered is a button that reads as broken."""
+        self.in_kelvin("2t")
+
+        self.assertEqual(self.offer().slots, ("tcc",))
+
+    def test_there_is_no_offer_when_every_match_is_in_the_wrong_unit(self):
+        self.in_kelvin("2t")
+        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+
+        self.assertIsNone(self.offer())
+
+    def test_applying_it_leaves_a_wrong_unit_match_blank(self):
+        self.in_kelvin("2t")
+
+        self.assertEqual(self.apply().status_code, 302)
+
+        self.assertIsNone(self.stored("2t"))
+        self.assertEqual(self.stored("tcc"), self.variable("tcc"))
 
     def test_applying_it_fills_the_blank_slots(self):
         response = self.apply()
@@ -537,31 +583,17 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
     def test_applying_it_never_overwrites_a_filled_slot(self):
         """Filled with a variable whose slug is not the slot's — the case a
         re-match would most plausibly "correct", and the one it must not."""
-        dewpoint = Variable.objects.create(
-            collection=self.collection,
-            slug="dewpoint",
-            name="dewpoint",
-            unit=self.variable("2d").unit,
-            value_min=-100,
-            value_max=2000,
-        )
+        dewpoint = self.variable_like("dewpoint", like="2d")
         self.publication.variable_mappings.filter(slot="2d").update(variable=dewpoint)
 
-        self.assertEqual(list(self.client.get(self.url).context["form"].offer), ["2t", "tcc"])
+        self.assertEqual(self.offer().slots, ("2t", "tcc"))
         self.assertEqual(self.apply().status_code, 302)
         self.assertEqual(self.stored("2d"), dewpoint)
 
     def test_a_slot_chosen_on_the_page_is_not_overwritten_by_applying(self):
         """Blank when the page was rendered, chosen before the button was
         pressed: the choice is the newer decision."""
-        chosen = Variable.objects.create(
-            collection=self.collection,
-            slug="air-temperature",
-            name="air-temperature",
-            unit=self.variable("2t").unit,
-            value_min=-100,
-            value_max=2000,
-        )
+        chosen = self.variable_like("air-temperature", like="2t")
 
         self.apply(**{forms.field_name("2t"): chosen.pk})
 
@@ -584,8 +616,7 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
         self.assertEqual(self.publication.generation, 2)
 
     def test_applying_it_with_nothing_to_fill_raises_nothing(self):
-        Variable.objects.filter(pk=self.variable("2t").pk).update(slug="temperature-2m")
-        Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
+        self.rename_both_matches()
 
         self.assertEqual(self.apply().status_code, 302)
         self.publication.refresh_from_db()
@@ -593,11 +624,12 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
         self.assertEqual(self.publication.generation, 0)
 
     def test_the_unit_refusal_still_applies(self):
-        """The match is by slug, and a slug says nothing about a unit."""
-        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
-        Variable.objects.filter(pk=self.variable("2t").pk).update(unit=kelvin)
+        """To the rows chosen by hand on the same submit: taking the offer is a
+        save, and a save refuses a wrong unit wherever it came from."""
+        by_hand = self.variable_like("t2m-kelvin", like="2t")
+        self.in_kelvin("t2m-kelvin")
 
-        response = self.apply()
+        response = self.apply(**{forms.field_name("2t"): by_hand.pk})
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(forms.field_name("2t"), response.context["form"].errors)

@@ -246,7 +246,8 @@ arrive, the mapping page **offers** the match instead: it names the blank rows a
 same-named variable could fill, and *Fill these rows and save* applies it. That is
 an ordinary save — the unit refusal, the warnings and the acknowledgement all
 apply, and the generation rises once per row it filled. A filled row is never
-offered, whatever its slug, and the offer is absent when it would fill nothing.
+offered, whatever its slug; neither is a match in the wrong unit, which the save
+would only refuse; and the offer is absent when it would fill nothing.
 
 Changing a mapping **raises the generation and marks the publication stale**, so
 the next publish outranks the last and the sweep picks it up within five minutes

@@ -73,9 +73,12 @@ def fillable(mapped: dict, variables) -> dict:
     too, so an empty result means there is nothing to offer — which is how a
     collection that names its variables its own way reads.
 
-    Seeding applies auto-match once and nothing re-applies it (ADR 0004), so
-    this is never called on a write path of its own accord. It is the same rule
-    *offered*, for an operator to take or leave.
+    Seeding applies auto-match once and nothing re-applies it (ADR 0004). This
+    only answers what the rule *would* fill; the mapping page offers that, and
+    nothing is written unless an operator takes it.
+
+    By slug alone, like the rule it reuses. Whether a match is in the slot's unit
+    is the model's question, and the form asks it before offering.
     """
     matched = auto_match(variables)
     return {key: matched[key] for key in params.SLOT_KEYS if mapped.get(key) is None and matched[key] is not None}

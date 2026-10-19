@@ -173,16 +173,16 @@
 
 {% comment %}
     The slug match, offered and not applied. Rendered only when it would fill
-    something — `forms.offer` is empty otherwise — because a button that fills
+    something — `form.offer` is None otherwise — because a button that fills
     no row reads as one that is broken. The sentence names every row it would
     fill, and the button is a second submit of this same form: taking the offer
     is a save, with the same refusals and warnings as the Save below.
 {% endcomment %}
-{% if offer_sentence %}
+{% if offer %}
     <div class="fm-offer">
-        <p>{{ offer_sentence }}</p>
-        <button type="submit" name="{{ apply_matches_field }}" value="1" class="button button-small button-secondary">
-            {{ apply_matches_label }}
+        <p>{{ offer.sentence }}</p>
+        <button type="submit" name="{{ offer.field_name }}" value="1" class="button button-small button-secondary">
+            {{ offer.label }}
         </button>
     </div>
 {% endif %}

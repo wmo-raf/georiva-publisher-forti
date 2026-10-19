@@ -39,6 +39,19 @@ a button. It is **absent** when it would fill nothing — when every row is fill
 or when the collection names its variables its own way — because a button that
 fills no row reads as one that is broken.
 
+### A match the save would refuse is not offered
+
+A match is by slug, and a slug says nothing about a unit. Offered, a match in
+the wrong unit could only be refused — and the refusal refuses the whole submit,
+taking the rows that would have been fine down with it. An offer that cannot
+succeed as offered is the broken button again. So the form asks each match the
+question the save will ask — `FortiVariableMapping.clean()`, the one unit refusal
+in the plugin — and leaves out any it refuses. That row stays blank and
+incomplete, like a row nothing matches, and is filled by hand or not at all.
+
+`fillable` stays slug-only and pure: the unit check needs the model, and the
+form already asks the model for exactly this on every submit.
+
 ### Applying it is an ordinary save
 
 The button is a second submit of the same form. Taking the offer writes the
@@ -65,7 +78,11 @@ decision.
 **An ordinary Save still re-matches nothing.** ADR 0004's guarantee is unchanged
 and asserted at the admin seam beside the offer.
 
-**The match is by slug and says nothing about units.** An offered variable in the
-wrong unit is refused on applying, like any hand-chosen one; the offer does not
-pre-screen it, because a refusal the operator can read is better than a row that
-is silently not offered.
+**A wrong-unit match is silently not offered**, rather than offered and refused.
+The row still reads as incomplete, and choosing that variable by hand meets the
+unit refusal and its sentence — so the operator who goes looking learns why; the
+one who takes the offer is not stopped over a row it did not need to touch.
+
+**The offer is read from what is stored, at render and again at submit.** A save
+landing between the two can change what the button fills. It still fills only
+rows that are blank in what was posted, so it never overwrites anything.

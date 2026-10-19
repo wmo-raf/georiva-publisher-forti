@@ -80,13 +80,13 @@ INCOMPLETE_LABEL = "not set"
 #: of dashes, because leaving a slot blank is a thing an operator may mean.
 EMPTY_LABEL = "— none —"
 
-#: The name of the button that applies the slug match to the blank rows. A
-#: button rather than a field: what it posts is "this submit, with the offer
-#: taken", and a value stored nowhere — the rows it fills are saved like any
-#: other row, and nothing remembers how they got their value.
-APPLY_MATCHES_FIELD = "fill_blank_rows_by_name"
+#: The name of the button that takes the offer. A button rather than a field:
+#: what it posts is "this submit, with the offer taken", and a value stored
+#: nowhere — the rows it fills are saved like any other row, and nothing
+#: remembers how they got their value.
+TAKE_OFFER_FIELD = "take_offer"
 
-APPLY_MATCHES_LABEL = "Fill these rows and save"
+TAKE_OFFER_LABEL = "Fill these rows and save"
 
 #: What the offer says, naming every row it would fill so that it is not a black
 #: box. One sentence for one row and one for several, because "2t are not set"
@@ -159,6 +159,31 @@ class Row:
     @property
     def incomplete(self) -> bool:
         return not self.field.value()
+
+
+@dataclass(frozen=True)
+class Offer:
+    """The slug match, offered for the blank rows it can actually fill.
+
+    ``variables`` is ``{slot key: variable}`` in vocabulary order, and never
+    empty: a form with nothing to offer has no offer rather than an empty one,
+    the way it has no acknowledgement when there is nothing to acknowledge.
+    """
+
+    variables: dict
+
+    field_name = TAKE_OFFER_FIELD
+    label = TAKE_OFFER_LABEL
+
+    @property
+    def slots(self) -> tuple[str, ...]:
+        return tuple(self.variables)
+
+    @property
+    def sentence(self) -> str:
+        """The offer in words, naming every row it would fill."""
+        template = OFFER_ONE if len(self.variables) == 1 else OFFER_MANY
+        return template.format(slots=listed(self.slots))
 
 
 @dataclass(frozen=True)
@@ -269,11 +294,27 @@ class VariableMappingFormBase(forms.Form):
             variable = stored.get(slot.key)
             self.initial[field_name(slot.key)] = variable.pk if variable else None
 
-        #: The blank rows the slug match could fill, as stored — which is what
-        #: the page that offered it was rendered from.
-        self.offer = mapping.fillable(stored, variables)
-        if self.is_bound and APPLY_MATCHES_FIELD in self.data:
+        #: The blank rows the slug match can fill, as stored, or ``None``.
+        self.offer = self._offer(stored, variables)
+        if self.offer is not None and self.is_bound and TAKE_OFFER_FIELD in self.data:
             self.data = self._with_offer_taken(self.data)
+
+    def _offer(self, stored: dict, variables):
+        """The slug match, less any match the save would refuse.
+
+        A match is by slug, and a slug says nothing about a unit. A match in the
+        wrong unit offered would be refused on applying — and that refusal
+        refuses the whole save, the rows that would have been fine with it — so
+        the offer could never succeed as offered. It is left out, by asking the
+        model the same question the save will, and its row stays blank and
+        incomplete like any row nothing matches.
+        """
+        offered = {
+            key: variable
+            for key, variable in mapping.fillable(stored, variables).items()
+            if self._refusal(key, variable) is None
+        }
+        return Offer(variables=offered) if offered else None
 
     def _with_offer_taken(self, data):
         """The posted mapping with the offered variables in its blank rows.
@@ -290,21 +331,13 @@ class VariableMappingFormBase(forms.Form):
         offered at all.
         """
         data = data.copy()
-        for key, variable in self.offer.items():
+        for key, variable in self.offer.variables.items():
             name = field_name(key)
             if not data.get(name):
                 data[name] = str(variable.pk)
         return data
 
     # -- what the page reads -------------------------------------------------
-
-    @property
-    def offer_sentence(self) -> str:
-        """The offer in words, naming every row it would fill."""
-        if not self.offer:
-            return ""
-        template = OFFER_ONE if len(self.offer) == 1 else OFFER_MANY
-        return template.format(slots=listed(self.offer))
 
     @staticmethod
     def mapping_field_names() -> list[str]:
@@ -395,13 +428,21 @@ class VariableMappingFormBase(forms.Form):
         would be the second — free to drift from the one the shell, the planner
         and any later API all still read.
         """
+        refusal = self._refusal(slot_key, variable)
+        if refusal is not None:
+            self.add_error(name, refusal.messages)
+            return False
+        return True
+
+    def _refusal(self, slot_key: str, variable) -> ValidationError | None:
+        """The model's refusal of this variable in this slot, if it has one —
+        asked of the model for the reason :meth:`_slot_accepts` gives."""
         row = FortiVariableMapping(publication=self.publication, slot=slot_key, variable=variable)
         try:
             row.clean()
         except ValidationError as refusal:
-            self.add_error(name, refusal.messages)
-            return False
-        return True
+            return refusal
+        return None
 
     # -- writing -------------------------------------------------------------
 
