@@ -20,13 +20,16 @@ from django.utils import timezone
 from django_celery_beat.models import IntervalSchedule, PeriodicTask
 
 from georiva.config.celery import app
-from georiva.core.build_discipline import build_attempt, dispatch_build, stand_down, sweep_builds
+from georiva.core.build_discipline import build_attempt, dispatch_build, stand_down
+from georiva.events.context import EventContext, current_context, new_context, use_context
+from georiva.events.tasks import ChainedTask, EntryTask, SweepTask
 
 logger = logging.getLogger(__name__)
 
 
 @app.task(
     name="georiva_publisher_forti.tasks.publish_forti_area",
+    base=ChainedTask,
     bind=True,
     max_retries=0,  # failures go to FAILED; the sweep retries
     acks_late=True,
@@ -81,6 +84,8 @@ def dispatch_publish(publication_id: int, claimed_by: str = "signal", force: boo
 
 @app.task(
     name="georiva_publisher_forti.tasks.sweep_forti_publications",
+    base=SweepTask,
+    sweep_name="sweep_forti_publications",
     queue="georiva-default",
 )
 def sweep_forti_publications() -> None:
@@ -90,14 +95,54 @@ def sweep_forti_publications() -> None:
     finds nothing. It exists for the cases the trigger cannot cover: a worker that
     died mid-build, a publication created while its run was already closed, a
     task lost between claim and queue.
+
+    Core's ``sweep_builds`` less its one loop, because each publish has to be
+    dispatched in the chain of the run it will publish: a sweep runs under
+    ``sweep:<name>``, and a publish it revives belongs to the story that run
+    is already part of, not to a new one per pass.
     """
     from .models import FortiPublication
 
-    sweep_builds(FortiPublication, publish_forti_area)
+    reset = FortiPublication.reset_stale_locks()
+    if reset:
+        logger.info("FortiPublication: reset %d stale lock(s)", reset)
+
+    dispatched = 0
+    for publication in FortiPublication.get_buildable():
+        with use_context(_revival_context(publication)):
+            dispatched += dispatch_publish(publication.pk, claimed_by="sweep")
+    if dispatched:
+        logger.info("FortiPublication: dispatched %d build task(s)", dispatched)
+
+
+def _revival_context(publication) -> EventContext:
+    """The chain of the run the publish will publish, as the sweep and with no Caused-by.
+
+    The run's latest close, not the publication's last ``PublicationWritten``.
+    The sweep exists for publishes that never completed — a worker that died, a
+    task lost, a run closing while the previous publish was still in flight —
+    and in every one of those the last publication belongs to the run *before*,
+    so its chain would file this publish under a story it is not part of.
+
+    The run is the planner's: the collection's latest closed one. A publication
+    with no closed run, or one closed before events were recorded, has no chain
+    to continue and starts one in its own organisation — a chain is
+    single-organisation, and one sweep pass crosses all of them.
+    """
+    from georiva.ingestion.models import RunIngestion, RunIngestionClosed
+
+    sweep = current_context()
+    actor = sweep.actor if sweep is not None else f"sweep:{sweep_forti_publications.sweep_name}"
+    run = RunIngestion.latest_closed(publication.collection)
+    closed = RunIngestionClosed.objects.filter(run=run).order_by("-occurred_at").first() if run else None
+    if closed is None:
+        return new_context(actor=actor, organisation_id=publication.organisation.pk)
+    return EventContext(correlation_id=closed.correlation_id, actor=actor, organisation_id=closed.organisation_id)
 
 
 @app.task(
     name="georiva_publisher_forti.tasks.refresh_forti_config",
+    base=EntryTask,
     queue="georiva-default",
 )
 def refresh_forti_config() -> None:
@@ -137,6 +182,7 @@ def refresh_forti_config() -> None:
 
 @app.task(
     name="georiva_publisher_forti.tasks.prune_forti_publications",
+    base=EntryTask,
     bind=True,
     acks_late=True,
     queue="georiva-default",

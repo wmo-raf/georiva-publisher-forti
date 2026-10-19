@@ -49,6 +49,14 @@ reporting an error, because from the reader's side the marker was a promise. The
 sink refuses a marker path from `write()` and takes them only through
 `publish_markers()`, after the bytes are staged.
 
+### Which core it needs
+
+**GeoRiva core 0.5.0 or later** — the release that carries core's Domain events
+extension point (wmo-raf/georiva#432). The plugin defines its own event table on
+core's abstract base, protects it with core's append-only migration operation,
+and runs its tasks on core's task base classes, so on an older core it does not
+import at all.
+
 ## What it writes
 
 ```
@@ -701,6 +709,32 @@ hundred. The 250-row ceiling above that is a guard on the deployment where that
 pass is *not* running — rows then accumulate until somebody notices, and the page
 they would notice on must not be the one that stops loading. When it bites, the
 table says how many rows it is not showing.
+
+## Traceability: `PublicationWritten`
+
+Every publish that writes a version records a **`PublicationWritten`** Domain
+event, in the same transaction as `mark_ready` and after the markers: the
+publication's slug, area key and root, the run's collection, reference time and
+revision, the version `latest/<area key>` now names, and how much was written.
+It is the recorded answer to "which run, at which revision, is the app
+showing" — the publication row is overwritten by the next publish, the event is
+not, and its table rejects `UPDATE` and `DELETE` in Postgres itself.
+
+It belongs to the chain that produced the run. The run-closed receiver
+dispatches inside the context after the `RunIngestionClosed` core hands it, so
+the publish carries the run's Correlation across the queue and names the close
+as its cause; the event then shows in core's **Timeline** for that chain, beside
+the fetch and the ingestions that led to it, scoped to the organisation like
+every other event. A publish the sweep picks up instead continues the chain of
+the run it publishes — that run's latest close — under the sweep's Actor
+(`sweep:sweep_forti_publications`); not the publication's last chain, which
+after a lost or overtaken publish belongs to the run before. A reopened run records nothing — it only
+marks stale — and neither does a publish that finds nothing new to write.
+
+All four tasks are on core's task base classes — the publish a `ChainedTask`,
+the sweep a `SweepTask`, the config reconciler and the retention pass
+`EntryTask`s. A plainly declared task would keep working and silently drop the
+chain.
 
 ## Tests
 

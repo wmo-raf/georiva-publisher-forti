@@ -33,6 +33,7 @@ from django.db import models
 
 from georiva.core.build_discipline import BuildAttemptLog, BuildDisciplinedModel
 from georiva.core.models import Collection, visible_visibilities
+from georiva.events.models import DomainEvent
 
 from . import parameters as params
 from .mapping import auto_match
@@ -893,3 +894,63 @@ class FortiPublicationBuildLog(BuildAttemptLog):
 
     def __str__(self):
         return f"{self.publication_id} {self.kind}/{self.outcome} @ {self.started_at:%Y-%m-%d %H:%M}"
+
+
+#: Who a publish is attributed to when nothing upstream named anyone: the
+#: receiver continuing a run's close, and a publish started from a shell.
+ACTOR = "system:georiva_publisher_forti"
+
+
+class PublicationWritten(DomainEvent):
+    """A version was published and its markers written (ADR 0030 in core).
+
+    The recorded answer to "which run, at which revision, is the app showing".
+    Recorded with ``mark_ready``, after the markers, so a version that exists
+    only as staged bytes is never claimed here; a publish that found nothing new
+    to write records nothing.
+
+    Every identifying fact is a snapshot. The publication row is overwritten by
+    the next publish and the run row by the next reopen, and this has to stay
+    true after both — so the links are ``SET_NULL`` conveniences and the columns
+    beside them are the record.
+    """
+
+    label = "Forti publication written"
+
+    publication = models.ForeignKey(
+        FortiPublication, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    run = models.ForeignKey(
+        "georivaingestion.RunIngestion", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    publication_slug = models.CharField(max_length=50)
+    area_key = models.CharField(max_length=255)
+    root = models.CharField(max_length=100, help_text="The sink root every area is published under.")
+    collection_slug = models.CharField(max_length=255)
+    catalog_slug = models.CharField(max_length=255)
+    reference_time = models.DateTimeField()
+    revision = models.PositiveIntegerField()
+    version = models.BigIntegerField(help_text="The integer latest/<area key> was set to.")
+
+    point_count = models.PositiveIntegerField()
+    step_count = models.PositiveIntegerField()
+    parameter_count = models.PositiveIntegerField()
+    objects_written = models.PositiveIntegerField()
+    versions_pruned = models.PositiveIntegerField()
+
+    class Meta(DomainEvent.Meta):
+        indexes = [models.Index(fields=["publication", "-occurred_at"], name="idx_forti_written_pub")]
+
+    def summary(self):
+        return (
+            f"Published {self.area_key} version {self.version} from the "
+            f"{self.reference_time:%Y-%m-%d %H:%M}Z run at revision {self.revision}"
+        )
+
+    def subject_url(self):
+        if self.publication_id is None:
+            return None
+        from .wagtail_hooks import inspect_url
+
+        return inspect_url(self.publication)

@@ -16,15 +16,22 @@ import logging
 
 from django.dispatch import receiver
 
+from georiva.events.context import context_after, ensure_context, use_context
 from georiva.ingestion.domain_signals import run_ingestion_closed, run_ingestion_reopened
 
 logger = logging.getLogger(__name__)
 
 
 @receiver(run_ingestion_closed, dispatch_uid="forti_publisher_run_closed")
-def on_run_closed(sender, run, **kwargs):
-    """A run finished arriving — publish it."""
-    from .models import FortiPublication
+def on_run_closed(sender, run, event=None, **kwargs):
+    """A run finished arriving — publish it, as the next link of the run's chain.
+
+    ``event`` is the ``RunIngestionClosed`` core just wrote. Dispatching inside
+    the context after it is what puts the run's Correlation in the task headers
+    and the close in the publish's Caused-by; the publish task reads them back
+    on the far side of the queue.
+    """
+    from .models import ACTOR, FortiPublication
     from .tasks import dispatch_publish
 
     publication = FortiPublication.for_collection(run.collection)
@@ -32,7 +39,13 @@ def on_run_closed(sender, run, **kwargs):
         return
 
     publication.mark_stale()
-    if not dispatch_publish(publication.pk):
+    if event is not None:
+        chain = use_context(context_after(event, actor=ACTOR))
+    else:
+        chain = ensure_context(actor=ACTOR, organisation_id=publication.organisation.pk)
+    with chain:
+        dispatched = dispatch_publish(publication.pk)
+    if not dispatched:
         logger.info(
             "forti: %s already in flight when run %s closed — the running build or the sweep will pick the change up",
             publication.slug,
