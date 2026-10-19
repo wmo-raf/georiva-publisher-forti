@@ -16,9 +16,14 @@ only ``mark_ready`` writes.
 import logging
 
 import numpy as np
+from django.db import transaction
+
+from georiva.events.context import ensure_context
+from georiva.events.recording import record
 
 from . import derivations
 from .grid import from_raster_window
+from .models import ACTOR, SINK_ROOT, PublicationWritten
 from .planner import NothingToPublish, PublicationRefused, latest_item_geometry, plan
 from .reader import WindowReader
 from .symbol import weather_symbol
@@ -84,21 +89,26 @@ def publish(publication, facts: dict | None = None) -> dict:
     pruned = prune(publication, keep=VERSIONS_KEPT)
     facts["versions_pruned"] = pruned
 
-    publication.mark_ready(
-        input_fingerprint=publish_plan.fingerprint,
-        grid_id=grid.identifier,
-        point_count=grid.point_count,
-        # Written back because the planner may have *reset* it: a new run
-        # publishes at generation 0 whatever the field said, and a row left
-        # reading 4 while its stamp ends 00 is a row whose next hand-raise to 5
-        # names bytes that were never written. The plan is the authority here —
-        # it is the value the stamp on the bucket was built from.
-        generation=publish_plan.generation,
-        published_version=publish_plan.version,
-        published_reference_time=publish_plan.reference_time,
-        published_step_count=publish_plan.step_count,
-        published_parameters=[parameter.name for parameter in publish_plan.parameters],
-    )
+    # The row and the event commit together or not at all (ADR 0030 in core):
+    # an event without ``mark_ready`` claims a version the row does not, and a
+    # ``mark_ready`` without the event is a publish nobody can trace.
+    with transaction.atomic(), ensure_context(actor=ACTOR, organisation_id=publication.organisation.pk):
+        publication.mark_ready(
+            input_fingerprint=publish_plan.fingerprint,
+            grid_id=grid.identifier,
+            point_count=grid.point_count,
+            # Written back because the planner may have *reset* it: a new run
+            # publishes at generation 0 whatever the field said, and a row left
+            # reading 4 while its stamp ends 00 is a row whose next hand-raise to 5
+            # names bytes that were never written. The plan is the authority here —
+            # it is the value the stamp on the bucket was built from.
+            generation=publish_plan.generation,
+            published_version=publish_plan.version,
+            published_reference_time=publish_plan.reference_time,
+            published_step_count=publish_plan.step_count,
+            published_parameters=[parameter.name for parameter in publish_plan.parameters],
+        )
+        _record_written(publication, publish_plan, grid, facts)
 
     # The config, last, and inline. It advertises this area and its parameters,
     # so it must follow the markers — but "after the markers" is not enough: it
@@ -129,6 +139,33 @@ def publish(publication, facts: dict | None = None) -> dict:
         "steps": publish_plan.step_count,
         "pruned": pruned,
     }
+
+
+def _record_written(publication, publish_plan, grid, facts: dict) -> None:
+    """``PublicationWritten``, in the chain the publish was dispatched in.
+
+    The run's close when the receiver dispatched it, the publication's last
+    chain when the sweep did; a fresh one only for a publish started by hand.
+    """
+    collection = publication.collection
+    record(
+        PublicationWritten,
+        publication=publication,
+        run=publish_plan.run,
+        publication_slug=publication.slug,
+        area_key=publication.area_key,
+        root=SINK_ROOT,
+        collection_slug=collection.slug,
+        catalog_slug=collection.catalog.slug,
+        reference_time=publish_plan.reference_time,
+        revision=publish_plan.run.revision,
+        version=publish_plan.version,
+        point_count=grid.point_count,
+        step_count=publish_plan.step_count,
+        parameter_count=len(publish_plan.parameters),
+        objects_written=facts["objects_written"],
+        versions_pruned=facts["versions_pruned"],
+    )
 
 
 def _refresh_config(publication) -> None:
