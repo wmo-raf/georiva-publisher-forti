@@ -161,6 +161,117 @@ Finding 2 is not re-measured here. It costs a staged probe grid and the number i
 produced has not moved; this run's `maximum_gridpoint_distance` is the 50 000 the
 finding settled on, and Accra's answer is consistent with it.
 
+## What the re-verification showed — 2026-10-19
+
+Re-run for #15, after ADR 0003 changed the version scheme and #10–#14 added the
+surfaces that read it. Kept beside the cutover because it re-confirms the same
+measurements, and because the cutover's own evidence contained the one state the
+version change exists to break: `published = available = loaded` as three equal
+integers, which looks like health whether or not anybody is serving the bytes the
+database means.
+
+The same single pair, `forti-rawdataforecaster:v0.8.1-wmo.1` and
+`forti-jsonfrontend:v0.8.1-wmo.1`, rebuilt for this run from `wmo-raf/forti`
+`develop` at `50c9b92` because neither image was still on the dev daemon. One
+area, `central.ecmwf-ifs`, run 2026-10-19T00:00Z, revision 15, 1920 points, grid
+`dd566ea71ba587cecb5d66213e235d07`, 13 parameters, **11 steps**: sixteen steps
+landed, one file each, and five of them had valid times that passed before the
+run closed, the same pruning the cutover recorded.
+
+The readings below were taken at 12:40, after the remap and its revert, unless a
+time says otherwise.
+
+**The four hops agree, on both documents.** `verification.report()` puts
+`intended`, `bucket`, `volume` and `loaded` on one digest each:
+`rawdataforecaster.json` `0aa2e5d51916640a06711fe6ea7e86bce13b9f526fd590737f0ccfe48adb22bc`
+and `jsonformat.json` `107ab39f7304d8cedb79dc4915a5e22fa1aefd1693121cbfe0ca1f2bb0931a64`.
+Both begin with the twelve characters the cutover recorded. `jsonformat.json`
+read `0488f3e5ccd8…` earlier the same day, under the 2026-10-17 run's 12
+parameters; when this run grew enough steps for `weather_symbol_12h` the document
+moved, and `jsonfrontend` applied it at 11:31:26 without a restart. Neither
+document moved during the remap below: `rawdataforecaster.json` read the same
+digest at 11:11 and at 12:40, `jsonformat.json` has read `107ab39f7304…` since
+11:31, and the full read at 12:19:12 found both chains agreeing.
+
+**The area is resident at the version the database published.**
+`published = available = loaded = 17923680001502`, and the publications listing's
+`resident_areas().of()` reads `agrees` for the same row.
+
+**A real forecast**, `GET /api/forecast/ecmwf-ifs/?lat=-1.2864&lon=36.8172` on host
+`localhost`: 200, 11 timesteps from 2026-10-19T15:00Z to 2026-10-20T21:00Z, 11
+units, `next_6_hours` on 9 steps and `next_12_hours` on 7, symbols including
+`partlycloudy_day`, `partlycloudy_night`, `fair_day`, `fair_night` and
+`lightrainshowers_day`, `Cache-Control: public, max-age=1800`, and
+`properties.meta.area` back as `central.ecmwf-ifs`. Accra still answers 200 with
+`"no data at the given location"`, empty units and an empty `timeseries`.
+
+**The tenant boundary holds, out of cache too.** `localhost` is `MISS`, then
+`HIT`. The same URI on `emi.localhost` and `ke-kmd.localhost` is a **404**, and
+both listings are empty.
+
+### The remap, both ways
+
+The part only ADR 0003 could make observable. The `10fg` slot was remapped to
+`wind_speed_10m` — the same unit, so the refusal admits it, and a change visible in
+the answer itself: gust becomes wind speed. Then it was put back. Both through
+`FortiVariableMapping.save()`, the path the mapping editor's `save()` takes per
+row. A sampler inside the app container read the row and the upstream answer once
+a second, and the panel's residency every tenth second, for 18 minutes over the
+remap and 8 over the revert. It wrote a line whenever anything in its reading
+changed, the status code, the answering area and the step count included, so a
+single non-200 would have left a line of its own.
+
+| UTC | what happened | stamp | panel | upstream, step 0 |
+|---|---|---|---|---|
+| 12:13:56 | remapped, generation 0 → 1, row `stale` | `…1500` | agrees | gust 11.3, wind 5.1 |
+| 12:18:53 | the sweep claims it, `building` | `…1500` | agrees | unchanged |
+| 12:18:58 | published | **`…1501`** | agrees (not yet re-read) | unchanged |
+| 12:19:00 | `rawdataforecaster` makes `…1501` active | `…1501` | **differs**, resident `…1500` | **gust 5.1**, wind 5.1 |
+| 12:19:43 | | `…1501` | agrees `…1501` | gust 5.1 |
+| 12:31:54 | reverted, generation 1 → 2 | `…1501` | agrees | gust 5.1 |
+| 12:33:59 | published, and made active the same second | **`…1502`** | agrees (not yet re-read) | gust 5.1 |
+| 12:34:00 | upstream answers from `…1502`, `updated_at` 12:33:59 | `…1502` | | **gust 11.3** |
+| 12:34:08 | | `…1502` | **differs**, resident `…1501` | |
+| 12:34:50 | | `…1502` | agrees `…1502` | gust 11.3 |
+
+The 12:31:54 row is the revert command's own output, taken before the second
+sampler started at 12:32:04; every other row is a sampler line. A full
+`verification.report()` read at 12:19:12, inside the first window, said the same
+as the sampler: the area row `published = 17923680001501`,
+`available = loaded = 17923680001500`, `ok = False`.
+
+Each stamp is strictly greater than the one before, and only the generation digit
+moved: the run's half stayed `179236800015`. The reader loaded each one without a
+restart (`RestartCount` 0 on both processes for the whole session, started
+11:06:24), within two seconds of the publish, and the bytes it served changed
+with it. **Every reading across the 26 minutes was a 200 from
+`central.ecmwf-ifs` with 11 steps**: no eviction, no gap.
+
+### Three things the re-run showed that the plan did not say
+
+- **The panel's `differs` window is the status sync, not the reader.** The reader
+  held the new version two seconds after the publish; the panel saw it within a
+  minute (45 s on the remap, about 50 on the revert), because it reads the
+  bucket's copy of the reader's status document, which the sidecar uploads once
+  per `FORTI_SYNC_INTERVAL`. The verdict
+  on that window says "Wait for the next refresh (up to 5 minutes)". Five minutes
+  is the configuration reconciler's interval, not this path's; the honest bound
+  here is the 3-second poll plus one sync pass. The sentence errs long, which is
+  the safe direction, but it names the wrong mechanism.
+- **A fresh start reports its predecessor's status, and says so.** The first panel
+  read after the pair came up was taken before the sidecar's second pass, so the
+  bucket still held status documents ten days old. The panel rendered their age
+  as "10 days ago" and called the area `differs`, rather than reporting health.
+  One sync pass later it agreed.
+- **The compose file's default sidecar image had stopped existing.**
+  `minio/mc:RELEASE.2025-08-13T08-35-41Z` was not found at pull, and the `minio/mc`
+  repository is gone from Docker Hub entirely. Core moved its object store to Silo
+  (`b6dd116`), pinned at `pgsty/silo:RELEASE.2026-09-16T00-00-00Z`. The default is
+  now `pgsty/mc` at that same release tag, which carries `sh`, `sha256sum`, `cut`
+  and `date` and, like the image it replaces, no `cmp`. A daemon with the old
+  image already cached still runs it; any host pulling the old default fresh gets
+  "not found".
+
 ## One correction to D23
 
 D23 in the plan says a second writer to the config "would be silently reverted

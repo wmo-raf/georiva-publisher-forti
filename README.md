@@ -516,7 +516,9 @@ a 503 — and are not. What they cost to find, along with the
 `maximum_gridpoint_distance` measurement and why the `/api/` cache key carries
 `$host`, is in
 [`docs/adr/0002-four-measurements-the-reader-does-not-document.md`](docs/adr/0002-four-measurements-the-reader-does-not-document.md),
-which also records the run that verified this plane end to end.
+which also records the runs that verified this plane end to end: the cutover,
+and the re-run after the version scheme changed, which remapped a slot on a live
+plane and watched the reader follow it.
 
 A third container, the `mc` sidecar, is the whole interface between the database
 and the two processes. It runs one loop in two directions:
@@ -698,7 +700,7 @@ table says how many rows it is not showing.
 ## Tests
 
 ```bash
-make dev-test TEST_ARGS="georiva_publisher_forti"
+just test georiva_publisher_forti   # from core's repository root
 ```
 
 `test_publisher.py` is the one that matters: real GeoTIFFs in, a real sink out,
