@@ -97,9 +97,9 @@ def sweep_forti_publications() -> None:
     task lost between claim and queue.
 
     Core's ``sweep_builds`` less its one loop, because each publish has to be
-    dispatched in its own publication's chain: a sweep runs under
-    ``sweep:<name>``, and a publish it revives belongs to the story that
-    publication was already part of, not to a new one per pass.
+    dispatched in the chain of the run it will publish: a sweep runs under
+    ``sweep:<name>``, and a publish it revives belongs to the story that run
+    is already part of, not to a new one per pass.
     """
     from .models import FortiPublication
 
@@ -116,21 +116,28 @@ def sweep_forti_publications() -> None:
 
 
 def _revival_context(publication) -> EventContext:
-    """The publication's last chain, as the sweep and with no Caused-by.
+    """The chain of the run the publish will publish, as the sweep and with no Caused-by.
 
-    The same rule core's sweeps follow for the runs they revive. A publication
-    that has never been written has no chain to continue, so it starts one in
-    its own organisation — a chain is single-organisation, and one sweep pass
-    crosses all of them.
+    The run's latest close, not the publication's last ``PublicationWritten``.
+    The sweep exists for publishes that never completed — a worker that died, a
+    task lost, a run closing while the previous publish was still in flight —
+    and in every one of those the last publication belongs to the run *before*,
+    so its chain would file this publish under a story it is not part of.
+
+    The run is the planner's: the collection's latest closed one. A publication
+    with no closed run, or one closed before events were recorded, has no chain
+    to continue and starts one in its own organisation — a chain is
+    single-organisation, and one sweep pass crosses all of them.
     """
-    from .models import PublicationWritten
+    from georiva.ingestion.models import RunIngestion, RunIngestionClosed
 
     sweep = current_context()
     actor = sweep.actor if sweep is not None else f"sweep:{sweep_forti_publications.sweep_name}"
-    last = PublicationWritten.objects.filter(publication=publication).order_by("-occurred_at").first()
-    if last is None:
+    run = RunIngestion.latest_closed(publication.collection)
+    closed = RunIngestionClosed.objects.filter(run=run).order_by("-occurred_at").first() if run else None
+    if closed is None:
         return new_context(actor=actor, organisation_id=publication.organisation.pk)
-    return EventContext(correlation_id=last.correlation_id, actor=actor, organisation_id=last.organisation_id)
+    return EventContext(correlation_id=closed.correlation_id, actor=actor, organisation_id=closed.organisation_id)
 
 
 @app.task(

@@ -725,9 +725,10 @@ dispatches inside the context after the `RunIngestionClosed` core hands it, so
 the publish carries the run's Correlation across the queue and names the close
 as its cause; the event then shows in core's **Timeline** for that chain, beside
 the fetch and the ingestions that led to it, scoped to the organisation like
-every other event. A publish the sweep picks up instead continues the
-publication's last chain under the sweep's Actor
-(`sweep:sweep_forti_publications`). A reopened run records nothing — it only
+every other event. A publish the sweep picks up instead continues the chain of
+the run it publishes — that run's latest close — under the sweep's Actor
+(`sweep:sweep_forti_publications`); not the publication's last chain, which
+after a lost or overtaken publish belongs to the run before. A reopened run records nothing — it only
 marks stale — and neither does a publish that finds nothing new to write.
 
 All four tasks are on core's task base classes — the publish a `ChainedTask`,

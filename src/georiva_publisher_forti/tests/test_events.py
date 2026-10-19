@@ -31,7 +31,7 @@ from georiva_publisher_forti import tasks
 from georiva_publisher_forti.models import ACTOR, SINK_ROOT, FortiPublication, PublicationWritten
 from georiva_publisher_forti.publisher import publish
 
-from .factories import REFERENCE_TIME, make_collection, make_org_admin, make_publication
+from .factories import REFERENCE_TIME, make_collection, make_org_admin, make_publication, make_run
 from .test_publisher import PublishTestCase
 
 SWEEP_ACTOR = "sweep:sweep_forti_publications"
@@ -139,43 +139,61 @@ class RunClosedPublishTests(ChainTestCase):
 
 
 class SweptPublishTests(ChainTestCase):
-    def make_stale(self):
-        FortiPublication.objects.filter(pk=self.publication.pk).update(status=FortiPublication.Status.STALE)
+    """The sweep revives a publish in the chain of the run it will publish.
 
-    def test_a_swept_publish_keeps_the_publication_s_chain_under_the_sweep_s_actor(self):
-        earlier_chain = uuid.uuid4()
-        with event_context(organisation_id=self.organisation.pk, correlation_id=earlier_chain):
-            earlier = record(PublicationWritten, **_snapshot(self.publication))
+    Not the publication's last chain: the sweep exists for publishes that never
+    completed — a worker that died, a task lost, a run closing while the previous
+    publish was still in flight — and in every one of those the last
+    ``PublicationWritten`` belongs to the run *before*.
+    """
+
+    def make_stale(self):
+        FortiPublication.objects.filter(pk=self.publication.pk).update(
+            status=FortiPublication.Status.STALE, locked_by="", locked_at=None
+        )
+
+    def close_unpublished(self):
+        """The run closes again, but its publish never runs — the case the sweep is for."""
+        self.dispatching()
+        closed = self.reopen_and_close()
         self.make_stale()
+        return closed
+
+    def test_a_swept_publish_continues_the_chain_of_the_run_it_publishes(self):
+        with event_context(organisation_id=self.organisation.pk, correlation_id=uuid.uuid4()):
+            earlier = record(PublicationWritten, **_snapshot(self.publication))
+        closed = self.close_unpublished()
         capture = self.dispatching()
 
         tasks.sweep_forti_publications()
         capture.run_all()
 
         written = PublicationWritten.objects.exclude(pk=earlier.pk).get()
-        self.assertEqual(written.correlation_id, earlier_chain)
+        self.assertEqual(written.correlation_id, closed.correlation_id)
+        self.assertNotEqual(written.correlation_id, earlier.correlation_id)
+        self.assertEqual(written.run_id, closed.run_id)
         self.assertEqual(written.actor, SWEEP_ACTOR)
         self.assertEqual(written.organisation_id, self.organisation.pk)
         self.assertIsNone(written.caused_by_id)
 
-    def test_a_publication_never_written_starts_its_own_chain_in_its_own_organisation(self):
-        self.make_stale()
+    def test_a_publication_with_no_closed_run_starts_its_own_chain_in_its_own_organisation(self):
+        other = make_publication(make_collection(org_slug="other-org"))
+        FortiPublication.objects.filter(pk=self.publication.pk).update(is_enabled=False)
         capture = self.dispatching()
 
         tasks.sweep_forti_publications()
-        capture.run_all()
 
-        written = PublicationWritten.objects.get()
-        self.assertEqual(written.actor, SWEEP_ACTOR)
-        self.assertEqual(written.organisation_id, self.organisation.pk)
-        self.assertIsNone(written.caused_by_id)
+        ((args, context),) = capture.dispatched
+        self.assertEqual(args[0], other.pk)
+        self.assertEqual(context.actor, SWEEP_ACTOR)
+        self.assertEqual(context.organisation_id, other.organisation.pk)
+        self.assertIsNone(context.caused_by)
 
-    def test_each_publication_is_swept_into_its_own_chain(self):
+    def test_each_publication_is_swept_into_its_own_run_s_chain(self):
         """One sweep pass, two organisations: a chain is single-organisation."""
         other = make_publication(make_collection(org_slug="other-org"))
-        for publication, chain in ((self.publication, uuid.uuid4()), (other, uuid.uuid4())):
-            with event_context(organisation_id=publication.organisation.pk, correlation_id=chain):
-                record(PublicationWritten, **_snapshot(publication))
+        with event_context(organisation_id=other.organisation.pk):
+            make_run(other.collection)
         FortiPublication.objects.update(status=FortiPublication.Status.STALE)
         capture = self.dispatching()
 
@@ -183,9 +201,9 @@ class SweptPublishTests(ChainTestCase):
 
         chains = {args[0]: context for args, context in capture.dispatched}
         for publication in (self.publication, other):
-            last = PublicationWritten.objects.get(publication=publication)
+            closed = RunIngestionClosed.objects.filter(run__collection=publication.collection).get()
             with self.subTest(publication=publication.area_key):
-                self.assertEqual(chains[publication.pk].correlation_id, last.correlation_id)
+                self.assertEqual(chains[publication.pk].correlation_id, closed.correlation_id)
                 self.assertEqual(chains[publication.pk].organisation_id, publication.organisation.pk)
 
 
