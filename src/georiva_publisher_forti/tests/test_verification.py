@@ -393,6 +393,26 @@ class AreaTests(PanelTestCase):
         self.assertIn("not loaded", row.verdict)
         self.assertIn("restart the Forti services", row.verdict)
 
+    def test_a_published_version_not_on_the_bucket_yet_waits_on_a_sync_pass(self):
+        """A new version reaches the panel through the reader's 3 s poll and the
+        sidecar's sync pass, never through ``refresh_forti_config`` — so the
+        five-minute refresh is the wrong wait (#28). And the reader does not see
+        the version on the bucket at all, so the second move is the marker, not
+        a restart."""
+        self.publication.published_version = LATER
+        self.publication.save(update_fields=["published_version"])
+        self.write_forecaster(self.sha, areas=[{"area": self.area, "available": PUBLISHED, "loaded": PUBLISHED}])
+
+        row = self.areas()[0]
+
+        self.assertFalse(row.ok)
+        self.assertIn(
+            "which the forecast reader has not seen yet. Wait for the next sync pass; "
+            "if it stays behind, re-publish this area.",
+            row.verdict,
+        )
+        self.assertNotIn("5 minutes", row.verdict)
+
     def test_store_error_is_rendered_because_the_area_list_does_not_decay(self):
         """``available`` is the last listing that worked, so without the error a
         store nobody can reach is indistinguishable from one holding exactly
@@ -549,6 +569,10 @@ class ResidencyTests(PanelTestCase):
 
         self.assertEqual(residency.badge, "differs")
         self.assertEqual(residency.loaded, PUBLISHED)
+        self.assertIn(
+            "Wait for the next sync pass; if it stays behind, re-publish this area.",
+            residency.detail,
+        )
 
     def test_a_resident_area_ahead_of_the_published_version_also_differs(self):
         """The other direction, which used to render "agrees" in green.

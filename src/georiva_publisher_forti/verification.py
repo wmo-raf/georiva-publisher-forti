@@ -1176,12 +1176,17 @@ def _area_verdict(
             False,
         )
     if published is not None and loaded < published:
+        # A new version never goes through the reconciler: the reader polls
+        # `latest/` every 3 s and the sidecar's sync pass carries its status
+        # here, so the wait is one sync pass. And unlike `loaded < available`,
+        # the version is not on the bucket as the reader sees it, so the next
+        # suspect is the marker, not the reader.
         return (
             _(
                 "Serving version %(loaded)s; GeoRiva has since published %(published)s, which the forecast "
-                "reader has not seen yet. %(action)s"
+                "reader has not seen yet. Wait for the next sync pass; if it stays behind, re-publish this area."
             )
-            % {**figures, "action": WAIT_FOR_REFRESH},
+            % figures,
             False,
         )
     if published is None:

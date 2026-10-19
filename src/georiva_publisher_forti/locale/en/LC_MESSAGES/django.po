@@ -10,7 +10,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: georiva-publisher-forti\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-19 11:25+0000\n"
+"POT-Creation-Date: 2026-10-19 18:00+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -50,17 +50,17 @@ msgid ""
 msgstr ""
 
 #: templates/georiva_publisher_forti/inspect.html:159
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:161
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:193
 msgid "Forti parameter"
 msgstr ""
 
 #: templates/georiva_publisher_forti/inspect.html:160
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:162
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:194
 msgid "Shown in the app as"
 msgstr ""
 
 #: templates/georiva_publisher_forti/inspect.html:161
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:163
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:195
 msgid "Variable"
 msgstr ""
 
@@ -134,18 +134,18 @@ msgstr ""
 msgid "State"
 msgstr ""
 
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:152
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:168
 msgid ""
 "Choose which variable of the collection to publish as each Forti parameter. "
 "Rows were pre-filled where the names matched. Publishing waits until every "
 "row is set."
 msgstr ""
 
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:208
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:240
 msgid "What was checked"
 msgstr ""
 
-#: templates/georiva_publisher_forti/panels/variable_mapping.html:212
+#: templates/georiva_publisher_forti/panels/variable_mapping.html:244
 msgid "What was not checked"
 msgstr ""
 
@@ -760,21 +760,22 @@ msgid ""
 "restart the Forti services."
 msgstr ""
 
-#: verification.py:1181
+#: verification.py:1186
 #, python-format
 msgid ""
 "Serving version %(loaded)s; GeoRiva has since published %(published)s, which "
-"the forecast reader has not seen yet. %(action)s"
+"the forecast reader has not seen yet. Wait for the next sync pass; if it "
+"stays behind, re-publish this area."
 msgstr ""
 
-#: verification.py:1189
+#: verification.py:1194
 #, python-format
 msgid ""
 "Serving version %(loaded)s, but no publication on this instance uses this "
 "area any more. %(action)s"
 msgstr ""
 
-#: verification.py:1204
+#: verification.py:1209
 #, python-format
 msgid ""
 "Serving version %(loaded)s, which is newer than the %(published)s GeoRiva "
@@ -782,18 +783,18 @@ msgid ""
 "instance is publishing this area. %(action)s"
 msgstr ""
 
-#: verification.py:1212
+#: verification.py:1217
 #, python-format
 msgid "Serving version %(loaded)s, the version GeoRiva published. %(action)s"
 msgstr ""
 
-#: verification.py:1297
+#: verification.py:1302
 msgid ""
 "The forecast reader has no areas configured, so nothing is being served. "
 "Enable a publication."
 msgstr ""
 
-#: verification.py:1308
+#: verification.py:1313
 #, python-format
 msgid "The bucket did not answer within %(deadline)g seconds. %(action)s"
 msgstr ""
@@ -828,12 +829,12 @@ msgstr ""
 msgid "Variables — %s"
 msgstr ""
 
-#: wagtail_hooks.py:552
+#: wagtail_hooks.py:553
 #, python-format
 msgid "%s will be republished within a few minutes."
 msgstr ""
 
-#: wagtail_hooks.py:556
+#: wagtail_hooks.py:557
 #, python-format
 msgid "%s is being published right now — try again once it finishes."
 msgstr ""
