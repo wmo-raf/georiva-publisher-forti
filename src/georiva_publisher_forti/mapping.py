@@ -64,6 +64,23 @@ def auto_match(variables) -> dict:
     return {key: by_slug.get(key) for key in params.SLOT_KEYS}
 
 
+def fillable(mapped: dict, variables) -> dict:
+    """``{slot key: variable}`` — the blank slots :func:`auto_match` could fill.
+
+    Only blank slots, and only those with a match, in vocabulary order. A filled
+    slot is left out whatever its slug: it is somebody's decision, and the match
+    is a default, not a correction. A blank slot nothing matches is left out
+    too, so an empty result means there is nothing to offer — which is how a
+    collection that names its variables its own way reads.
+
+    Seeding applies auto-match once and nothing re-applies it (ADR 0004), so
+    this is never called on a write path of its own accord. It is the same rule
+    *offered*, for an operator to take or leave.
+    """
+    matched = auto_match(variables)
+    return {key: matched[key] for key in params.SLOT_KEYS if mapped.get(key) is None and matched[key] is not None}
+
+
 def concerns(mapped: dict) -> tuple[Concern, ...]:
     """Everything suspicious about a mapping that is nonetheless saveable.
 

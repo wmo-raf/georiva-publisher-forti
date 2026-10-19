@@ -57,6 +57,7 @@ from georiva.core.models import Variable
 from . import mapping
 from . import parameters as params
 from .models import FortiVariableMapping
+from .prose import listed
 
 #: Prefix distinguishing a slot's field from every other field on the form. Not
 #: cosmetic: it is what lets the page, the tests and :func:`field_name` agree on
@@ -78,6 +79,20 @@ INCOMPLETE_LABEL = "not set"
 #: What the chooser's own blank option says. Explicit rather than Django's row
 #: of dashes, because leaving a slot blank is a thing an operator may mean.
 EMPTY_LABEL = "— none —"
+
+#: The name of the button that applies the slug match to the blank rows. A
+#: button rather than a field: what it posts is "this submit, with the offer
+#: taken", and a value stored nowhere — the rows it fills are saved like any
+#: other row, and nothing remembers how they got their value.
+APPLY_MATCHES_FIELD = "fill_blank_rows_by_name"
+
+APPLY_MATCHES_LABEL = "Fill these rows and save"
+
+#: What the offer says, naming every row it would fill so that it is not a black
+#: box. One sentence for one row and one for several, because "2t are not set"
+#: reads as a mistake on a page whose job is to be believed.
+OFFER_ONE = "{slots} is not set, and the collection has a variable with the same name."
+OFFER_MANY = "{slots} are not set, and the collection has variables with the same names."
 
 ACKNOWLEDGEMENT_LABEL = "I have read the warnings above and want to save this anyway."
 
@@ -254,7 +269,42 @@ class VariableMappingFormBase(forms.Form):
             variable = stored.get(slot.key)
             self.initial[field_name(slot.key)] = variable.pk if variable else None
 
+        #: The blank rows the slug match could fill, as stored — which is what
+        #: the page that offered it was rendered from.
+        self.offer = mapping.fillable(stored, variables)
+        if self.is_bound and APPLY_MATCHES_FIELD in self.data:
+            self.data = self._with_offer_taken(self.data)
+
+    def _with_offer_taken(self, data):
+        """The posted mapping with the offered variables in its blank rows.
+
+        Applied to the *data*, before anything is cleaned, so that taking the
+        offer is an ordinary save and nothing more: the unit refusal, the
+        warnings and the acknowledgement all see it as if the operator had
+        chosen each variable by hand, and the page re-rendered after a refusal
+        shows the rows filled, so what is acknowledged is what is on it.
+
+        Only rows that were offered *and* are still blank in what was posted. A
+        row chosen on the page before the button was pressed is the newer
+        decision, and a row filled before the page was rendered was never
+        offered at all.
+        """
+        data = data.copy()
+        for key, variable in self.offer.items():
+            name = field_name(key)
+            if not data.get(name):
+                data[name] = str(variable.pk)
+        return data
+
     # -- what the page reads -------------------------------------------------
+
+    @property
+    def offer_sentence(self) -> str:
+        """The offer in words, naming every row it would fill."""
+        if not self.offer:
+            return ""
+        template = OFFER_ONE if len(self.offer) == 1 else OFFER_MANY
+        return template.format(slots=listed(self.offer))
 
     @staticmethod
     def mapping_field_names() -> list[str]:

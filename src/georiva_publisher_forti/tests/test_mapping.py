@@ -23,7 +23,7 @@ from django.test import SimpleTestCase, TestCase
 
 from georiva.core.models import Unit
 from georiva_publisher_forti import parameters as params
-from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns
+from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns, fillable
 from georiva_publisher_forti.models import FortiPublication, FortiVariableMapping
 
 from .factories import make_collection, make_publication
@@ -121,6 +121,39 @@ class AutoMatchTests(SimpleTestCase):
 
         self.assertEqual(matched["2t"].slug, "2t")
         self.assertNotIn("sea_surface_temperature", matched)
+
+
+class FillableTests(SimpleTestCase):
+    """What auto-match could add to a mapping that already exists.
+
+    Seeding runs auto-match once, and a blank row is never re-matched behind
+    anybody's back. This is the same rule asked again on purpose, by an operator,
+    and its whole contract is what it leaves alone: a filled slot is somebody's
+    decision, whatever its slug.
+    """
+
+    def blank(self, *keys):
+        return {key: None if key in keys else Named(f"chosen-{key}") for key in params.SLOT_KEYS}
+
+    def test_a_blank_slot_with_a_matching_variable_is_offered(self):
+        offered = fillable(self.blank("tcc"), [Named("tcc")])
+
+        self.assertEqual({key: variable.slug for key, variable in offered.items()}, {"tcc": "tcc"})
+
+    def test_a_filled_slot_is_never_offered_whatever_its_slug(self):
+        mapped = self.blank()
+
+        self.assertEqual(fillable(mapped, [Named(key) for key in params.SLOT_KEYS]), {})
+
+    def test_a_blank_slot_nothing_matches_is_not_offered(self):
+        self.assertEqual(fillable(self.blank("tcc"), [Named("total-cloud-cover")]), {})
+
+    def test_it_is_in_vocabulary_order(self):
+        """The order the page names them in, which is the order of the rows."""
+        keys = list(reversed(params.SLOT_KEYS))
+        offered = fillable(self.blank(*keys), [Named(key) for key in keys])
+
+        self.assertEqual(list(offered), list(params.SLOT_KEYS))
 
 
 class Declared(Named):
