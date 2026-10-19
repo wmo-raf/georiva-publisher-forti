@@ -125,6 +125,31 @@ class StandDownTests(TestCase):
 
 
 class RunSignalTests(TestCase):
+    """Core sends both run signals from ``transaction.on_commit`` (#448), and a
+    ``TestCase`` never commits — so every close and reopen here goes through
+    :meth:`_close` or :meth:`_reopen`, which run the callbacks. Without them the
+    receivers are simply never called, and a test of "does not publish" passes
+    for nothing."""
+
+    def _close(self, run):
+        """Close ``run`` and deliver the signal. Returns the patched ``delay``."""
+        from georiva.ingestion.models import RunIngestion
+
+        with patch.object(tasks.publish_forti_area, "delay") as delay, self.captureOnCommitCallbacks(execute=True):
+            run.close(RunIngestion.Closer.DECLARED_SET)
+        return delay
+
+    def _reopen(self, publication):
+        """Land one more file on the closed run and deliver the reopen signal.
+        Returns the patched ``delay``."""
+        from georiva.ingestion.models import RunIngestion
+
+        from .factories import REFERENCE_TIME
+
+        with patch.object(tasks.publish_forti_area, "delay") as delay, self.captureOnCommitCallbacks(execute=True):
+            RunIngestion.record_file(publication.collection, REFERENCE_TIME)
+        return delay
+
     def test_a_closed_run_dispatches_a_publish(self):
         """RunIngestion is the right granularity. The alternative — Asset.post_save
         — fires ~950 times per ECMWF run to produce one publish, and never once
@@ -136,10 +161,7 @@ class RunSignalTests(TestCase):
         publication = make_publication(make_collection())
         run = RunIngestion.objects.create(collection=publication.collection, reference_time=REFERENCE_TIME)
 
-        with patch.object(tasks.publish_forti_area, "delay") as delay:
-            run.close(RunIngestion.Closer.DECLARED_SET)
-
-        delay.assert_called_once()
+        self._close(run).assert_called_once()
 
     def test_a_reopened_run_marks_stale_without_publishing(self):
         """A reopen means more files are still arriving; publishing now burns a
@@ -150,16 +172,12 @@ class RunSignalTests(TestCase):
 
         publication = make_publication(make_collection())
         run = RunIngestion.objects.create(collection=publication.collection, reference_time=REFERENCE_TIME)
-        with patch.object(tasks.publish_forti_area, "delay"):
-            run.close(RunIngestion.Closer.DECLARED_SET)
+        self._close(run)
 
         # The build that close dispatched has finished.
         FortiPublication.objects.get(pk=publication.pk).mark_ready()
 
-        with patch.object(tasks.publish_forti_area, "delay") as delay:
-            RunIngestion.record_file(publication.collection, REFERENCE_TIME)
-
-            delay.assert_not_called()
+        self._reopen(publication).assert_not_called()
 
         self.assertEqual(
             FortiPublication.objects.get(pk=publication.pk).status,
@@ -176,14 +194,13 @@ class RunSignalTests(TestCase):
 
         publication = make_publication(make_collection())
         run = RunIngestion.objects.create(collection=publication.collection, reference_time=REFERENCE_TIME)
-        with patch.object(tasks.publish_forti_area, "delay"):
-            run.close(RunIngestion.Closer.DECLARED_SET)
+        self._close(run)
 
         in_flight = FortiPublication.objects.get(pk=publication.pk)
         self.assertEqual(in_flight.status, FortiPublication.Status.BUILDING)
         claim = in_flight.locked_by
 
-        RunIngestion.record_file(publication.collection, REFERENCE_TIME)
+        self._reopen(publication)
 
         after = FortiPublication.objects.get(pk=publication.pk)
         self.assertEqual(after.status, FortiPublication.Status.BUILDING)
