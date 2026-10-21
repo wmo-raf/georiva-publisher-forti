@@ -402,12 +402,66 @@ class RetentionTests(PublishTestCase):
             run.save(update_fields=["revision"])
         return versions
 
+    def _publish_runs(self, count):
+        """Publish ``count`` runs, each a revision of the last, with no trailing
+        bump — so the next generation raised is one of the newest run."""
+        run = self.collection.run_ingestions.get()
+        versions = []
+        for index in range(count):
+            if index:
+                run.revision += 1
+                run.save(update_fields=["revision"])
+                self.publication.mark_stale()
+            versions.append(publish(self.reread())["version"])
+        return versions
+
+    def _publish_generations(self, count):
+        """Remap the newest run ``count`` times, as an operator correcting a mapping would."""
+        versions = []
+        for _ in range(count):
+            publication = self.reread()
+            publication.generation += 1
+            publication.save(update_fields=["generation"])
+            publication.mark_stale()
+            versions.append(publish(self.reread())["version"])
+        return versions
+
+    def test_remaps_never_evict_the_run_a_bad_run_rolls_back_to(self):
+        """Counted in versions, four remaps of one run would fill every slot and
+        prune the run before it — the only thing to point a reader back to once
+        that run's data turns out to be wrong, because every generation of it
+        carries the same wrong data (ADR 0009)."""
+        previous, newest = self._publish_runs(2)
+        generations = self._publish_generations(publisher.RUNS_KEPT)
+        sink = self.sink()
+
+        self.assertTrue(sink.exists(f"{self.area_key}/{previous}/complete.json"))
+        for version in [newest, *generations]:
+            self.assertTrue(sink.exists(f"{self.area_key}/{version}/complete.json"))
+
+    def test_a_run_past_retention_goes_with_every_generation_of_it(self):
+        """Generations ride with their run, out as well as in: a superseded run
+        leaves no stray generation behind to be counted against the rest."""
+        oldest = self._publish_runs(1)
+        oldest += self._publish_generations(2)
+        run = self.collection.run_ingestions.get()
+        for _ in range(publisher.RUNS_KEPT):
+            run.revision += 1
+            run.save(update_fields=["revision"])
+            self.publication.mark_stale()
+            publish(self.reread())
+        sink = self.sink()
+
+        for version in oldest:
+            self.assertFalse(sink.exists(f"{self.area_key}/{version}/complete.json"))
+        self.assertEqual(len(sink.children(self.area_key)), publisher.RUNS_KEPT)
+
     def test_only_the_newest_versions_survive(self):
-        self._publish_versions(publisher.VERSIONS_KEPT + 2)
+        self._publish_versions(publisher.RUNS_KEPT + 2)
 
         remaining = self.sink().children(self.area_key)
 
-        self.assertEqual(len(remaining), publisher.VERSIONS_KEPT)
+        self.assertEqual(len(remaining), publisher.RUNS_KEPT)
 
     def test_retention_never_reaches_past_this_publication_s_own_area(self):
         """The root is shared now. A prune that took a prefix by name rather than
@@ -422,7 +476,7 @@ class RetentionTests(PublishTestCase):
         sink.write("other-org.ecmwf-ifs/1/abc/data", b"another tenant's bytes")
         sink.write("jsonformat.json", b"{}")
 
-        self._publish_versions(publisher.VERSIONS_KEPT + 2)
+        self._publish_versions(publisher.RUNS_KEPT + 2)
 
         self.assertTrue(sink.exists("other-org.ecmwf-ifs/1/abc/data"))
         self.assertTrue(sink.exists("jsonformat.json"))
@@ -430,13 +484,13 @@ class RetentionTests(PublishTestCase):
     def test_a_pruned_version_takes_its_own_manifest_with_it(self):
         """``complete.json`` is a completion marker, and a version directory that
         cannot lose it never goes away."""
-        versions = self._publish_versions(publisher.VERSIONS_KEPT + 1)
+        versions = self._publish_versions(publisher.RUNS_KEPT + 1)
         sink = self.sink()
 
         self.assertFalse(sink.exists(f"{self.area_key}/{versions[0]}/complete.json"))
 
     def test_the_version_a_reader_is_following_is_never_pruned(self):
-        versions = self._publish_versions(publisher.VERSIONS_KEPT + 1)
+        versions = self._publish_versions(publisher.RUNS_KEPT + 1)
         sink = self.sink()
 
         current = int(sink.read_bytes(f"latest/{self.area_key}").decode())

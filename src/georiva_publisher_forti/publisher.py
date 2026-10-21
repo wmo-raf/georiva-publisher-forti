@@ -23,7 +23,7 @@ from georiva.events.recording import record
 
 from . import derivations
 from .grid import from_raster_window
-from .models import ACTOR, SINK_ROOT, PublicationWritten
+from .models import ACTOR, GENERATIONS_PER_REVISION, SINK_ROOT, PublicationWritten
 from .planner import NothingToPublish, PublicationRefused, latest_item_geometry, plan
 from .reader import WindowReader
 from .symbol import weather_symbol
@@ -32,11 +32,13 @@ from .writer import Series, completion_markers, stage_version
 
 logger = logging.getLogger(__name__)
 
-#: How many versions of an area survive a retention pass, counting the one
-#: ``latest/<area>`` names. At roughly 3 MB a version, history is nearly free —
-#: and being able to point a reader back one version is what makes a bad publish
-#: recoverable in seconds.
-VERSIONS_KEPT = 5
+#: How many runs of an area survive a retention pass, every generation of each
+#: kept, and the version ``latest/<area>`` names kept whatever run it belongs to.
+#: At roughly 3 MB a version, history is nearly free — and being able to point a
+#: reader back one run is what makes a bad publish recoverable in seconds.
+#: Counted in runs rather than versions so that a remap never evicts the run a
+#: bad run would be rolled back to (ADR 0009).
+RUNS_KEPT = 5
 
 
 class GridMoved(Exception):
@@ -86,7 +88,7 @@ def publish(publication, facts: dict | None = None) -> dict:
         require_staged=[staged["witness"]],
     )
 
-    pruned = prune(publication, keep=VERSIONS_KEPT)
+    pruned = prune(publication, keep=RUNS_KEPT)
     facts["versions_pruned"] = pruned
 
     # The row and the event commit together or not at all (ADR 0030 in core):
@@ -274,8 +276,14 @@ def _values_for(parameter, publish_plan, grid, cubes, windows) -> np.ndarray:
     raise PublicationRefused(f"No derivation named {parameter.derivation!r} for {parameter.name}")
 
 
-def prune(publication, keep: int = VERSIONS_KEPT) -> int:
-    """Drop all but the newest ``keep`` versions of this area.
+def prune(publication, keep: int = RUNS_KEPT) -> int:
+    """Drop every version that does not belong to the newest ``keep`` runs.
+
+    A run is ``version // GENERATIONS_PER_REVISION`` — reference time and
+    revision, as D8 counted them — so the generations a remap adds ride free:
+    four remaps of one run cannot evict the run before it, which is the one a
+    bad run is rolled back to. A bad remap is rolled back to the previous
+    generation of the same run, and that is kept too.
 
     Count-based rather than age-based, and the version ``latest/<area key>``
     names is never a candidate however old it is — an area whose feed has
@@ -306,11 +314,11 @@ def prune(publication, keep: int = VERSIONS_KEPT) -> int:
         )
         return 0
 
-    versions = sorted(
-        (int(name) for name in sink.children(area_key) if name.isdigit()),
-        reverse=True,
+    versions = [int(name) for name in sink.children(area_key) if name.isdigit()]
+    runs_kept = sorted({version // GENERATIONS_PER_REVISION for version in versions}, reverse=True)[:keep]
+    doomed = sorted(
+        version for version in versions if version // GENERATIONS_PER_REVISION not in runs_kept and version != current
     )
-    doomed = [version for version in versions[keep:] if version != current]
 
     for version in doomed:
         sink.delete_prefix(publication.version_prefix(version), include_markers=True)

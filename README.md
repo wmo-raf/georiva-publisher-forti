@@ -371,9 +371,12 @@ Nothing goes on `georiva-ingestion`, which runs one pool process and admits fetc
 and extraction only (ADR 0025). A publish is derived from data that is already
 published and already servable, so nothing a reader can observe waits on it.
 
-Retention keeps **5 versions per area**, count-based, and never the version
-`latest/<area>` names however old it is — an area whose feed has stopped still
-has a reader following its last good version.
+Retention keeps **5 runs per area**, every generation of each, count-based, and
+never the version `latest/<area>` names however old it is — an area whose feed
+has stopped still has a reader following its last good version. A run is
+`version // 100` — reference time and revision — so a remap adds a version
+without spending a slot: four remaps of one run cannot evict the run before it,
+which is what a bad run is rolled back to (ADR 0009).
 
 ### Republishing one run after a configuration change
 
