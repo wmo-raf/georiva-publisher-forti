@@ -1,5 +1,5 @@
 {% extends "wagtailadmin/generic/inspect.html" %}
-{% load i18n wagtailadmin_tags l10n %}
+{% load i18n static wagtailadmin_tags l10n %}
 {% comment %}
     One publication, read rather than changed.
 
@@ -18,7 +18,70 @@
 
 {% block extra_css %}
     {{ block.super }}
+    <link rel="stylesheet" href="{% static 'css/vendor/maplibre-gl.css' %}">
     <style>
+        .fi-tryit {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 1.2em;
+            align-items: start;
+        }
+
+        @media (max-width: 60em) {
+            .fi-tryit {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
+        .fi-tryit-map {
+            height: 24em;
+            border: 1px solid var(--w-color-border-furniture);
+            border-radius: 4px;
+        }
+
+        .fi-tryit-map--off {
+            opacity: 0.6;
+        }
+
+        .fi-tryit-note {
+            margin: 0 0 0.6em;
+            color: var(--w-color-grey-400);
+            font-size: 0.9em;
+        }
+
+        .fi-tryit-status {
+            margin: 0 0 0.6em;
+            font-weight: 600;
+        }
+
+        .fi-tryit-status--error {
+            color: var(--w-color-critical-100);
+        }
+
+        .fi-tryit-facts {
+            margin: 0 0 0.8em;
+            font-size: 0.9em;
+        }
+
+        .fi-tryit-rows {
+            overflow-x: auto;
+            max-height: 18em;
+            margin-bottom: 0.8em;
+        }
+
+        .fi-tryit-raw {
+            max-height: 18em;
+            overflow: auto;
+            margin: 0.6em 0 0;
+            padding: 0.8em 1em;
+            background: #1e2530;
+            color: #d6dde8;
+            border-radius: 4px;
+            font-size: 0.8em;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         .fi-actions {
             display: flex;
             flex-wrap: wrap;
@@ -126,6 +189,37 @@
         {% endif %}
     </div>
 
+    <section class="fi-section" id="fi-tryit">
+        <h2>{% trans "Try it" %}</h2>
+        <p class="fi-lead">
+            {% blocktrans trimmed %}
+                Click the map to ask the forecast endpoint for that point, exactly as the app does.
+                Clicks outside the outlined area are sent too.
+            {% endblocktrans %}
+        </p>
+        {% if not try_it.servable %}
+            <p class="fi-tryit-note">
+                {% trans "Nothing is published yet — see Readiness below." %}
+            </p>
+        {% endif %}
+        <div class="fi-tryit">
+            <div id="fi-tryit-map" class="fi-tryit-map{% if not try_it.servable %} fi-tryit-map--off{% endif %}"></div>
+            <div id="fi-tryit-result" aria-live="polite">
+                <p class="fi-tryit-note" id="fi-tryit-hint">
+                    {% if try_it.servable %}{% trans "Click a point on the map." %}{% endif %}
+                </p>
+                <p class="fi-tryit-status" id="fi-tryit-status" hidden></p>
+                <p class="fi-tryit-facts" id="fi-tryit-facts" hidden></p>
+                <div class="fi-tryit-rows" id="fi-tryit-rows" hidden></div>
+                <details id="fi-tryit-raw-wrap" hidden>
+                    <summary>{% trans "Show response" %}</summary>
+                    <pre class="fi-tryit-raw" id="fi-tryit-raw"></pre>
+                </details>
+            </div>
+        </div>
+        {{ try_it|json_script:"fi-tryit-data" }}
+    </section>
+
     <section class="fi-section">
         <h2>{% trans "Forecast" %}</h2>
         <p class="fi-lead">
@@ -196,4 +290,202 @@
         <h2>{% trans "History" %}</h2>
         {% include "georiva_publisher_forti/panels/publish_history.html" %}
     </section>
+{% endblock %}
+
+{% block extra_js %}
+    {{ block.super }}
+    <script src="{% static 'js/vendor/maplibre-gl.js' %}"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const config = JSON.parse(document.getElementById('fi-tryit-data').textContent);
+            const [west, south, east, north] = config.bbox;
+
+            const hint = document.getElementById('fi-tryit-hint');
+            const status = document.getElementById('fi-tryit-status');
+            const facts = document.getElementById('fi-tryit-facts');
+            const rows = document.getElementById('fi-tryit-rows');
+            const rawWrap = document.getElementById('fi-tryit-raw-wrap');
+            const raw = document.getElementById('fi-tryit-raw');
+
+            const map = new maplibregl.Map({
+                container: 'fi-tryit-map',
+                style: {
+                    version: 8,
+                    sources: {
+                        basemap: {
+                            type: 'raster',
+                            tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'],
+                            tileSize: 256,
+                            attribution: 'Tiles © Esri'
+                        }
+                    },
+                    layers: [{id: 'basemap', type: 'raster', source: 'basemap'}]
+                },
+                bounds: [[west, south], [east, north]],
+                fitBoundsOptions: {padding: 24}
+            });
+            map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
+
+            map.on('load', function () {
+                map.addSource('bbox', {
+                    type: 'geojson',
+                    data: {
+                        type: 'Feature',
+                        geometry: {
+                            type: 'Polygon',
+                            coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]]
+                        }
+                    }
+                });
+                map.addLayer({
+                    id: 'bbox-line',
+                    type: 'line',
+                    source: 'bbox',
+                    paint: {'line-color': '#007d7e', 'line-width': 2}
+                });
+            });
+
+            let marker = null;
+            let inflight = null;
+
+            function reset() {
+                status.hidden = true;
+                status.classList.remove('fi-tryit-status--error');
+                facts.hidden = true;
+                rows.hidden = true;
+                rows.replaceChildren();
+                rawWrap.hidden = true;
+                hint.textContent = '';
+            }
+
+            function fail(text) {
+                status.textContent = text;
+                status.classList.add('fi-tryit-status--error');
+                status.hidden = false;
+            }
+
+            function setMarker(lon, lat) {
+                if (!marker) {
+                    marker = new maplibregl.Marker({color: '#007d7e'});
+                }
+                marker.setLngLat([lon, lat]).addTo(map);
+            }
+
+            /* Details of the instant bucket and of every next_N_hours bucket, in
+               the order the series gives them; the first bucket to name a key wins. */
+            function detailsOf(step) {
+                const out = {};
+                const data = step.data || {};
+                Object.keys(data).forEach(function (bucket) {
+                    const details = (data[bucket] || {}).details || {};
+                    Object.keys(details).forEach(function (key) {
+                        if (!(key in out)) {
+                            out[key] = details[key];
+                        }
+                    });
+                });
+                return out;
+            }
+
+            function renderRows(timeseries, units) {
+                const shown = timeseries.slice(0, 8);
+                const keys = [];
+                shown.forEach(function (step) {
+                    Object.keys(detailsOf(step)).forEach(function (key) {
+                        if (!keys.includes(key)) {
+                            keys.push(key);
+                        }
+                    });
+                });
+                const table = document.createElement('table');
+                table.className = 'fi-table';
+                const head = table.createTHead().insertRow();
+                ['time'].concat(keys).forEach(function (key) {
+                    const th = document.createElement('th');
+                    th.scope = 'col';
+                    th.textContent = units[key] ? key + ' (' + units[key] + ')' : key;
+                    head.appendChild(th);
+                });
+                const body = table.createTBody();
+                shown.forEach(function (step) {
+                    const row = body.insertRow();
+                    const details = detailsOf(step);
+                    row.insertCell().textContent = step.time;
+                    keys.forEach(function (key) {
+                        row.insertCell().textContent = key in details ? details[key] : '—';
+                    });
+                });
+                rows.replaceChildren(table);
+                rows.hidden = false;
+            }
+
+            function show(httpStatus, text, clicked) {
+                let body = null;
+                try {
+                    body = JSON.parse(text);
+                } catch (e) {
+                    body = null;
+                }
+                raw.textContent = body ? JSON.stringify(body, null, 2) : text;
+                rawWrap.hidden = false;
+
+                if (httpStatus !== 200 || !body) {
+                    fail(httpStatus + ' — ' + ((body && body.detail) || text.slice(0, 200) || 'no response body'));
+                    return;
+                }
+                const properties = body.properties || {};
+                const meta = properties.meta || {};
+                if (meta.error) {
+                    fail('200 — ' + meta.error);
+                    return;
+                }
+                status.textContent = '200';
+                status.hidden = false;
+                /* The response's geometry is the point asked for, not the gridpoint that
+                   answered — jsonfrontend does not say which one that was — so the
+                   point shown below is the click, and claims no more. */
+                const parts = [
+                    'point ' + clicked.lat.toFixed(3) + ', ' + clicked.lng.toFixed(3),
+                    'area ' + meta.area,
+                    'updated ' + meta.updated_at
+                ];
+                facts.textContent = parts.join(' · ');
+                facts.hidden = false;
+                renderRows(properties.timeseries || [], meta.units || {});
+            }
+
+            map.on('click', function (event) {
+                if (!config.servable) {
+                    return;
+                }
+                if (inflight) {
+                    inflight.abort();
+                }
+                const controller = new AbortController();
+                inflight = controller;
+                const clicked = event.lngLat.wrap();
+                reset();
+                setMarker(clicked.lng, clicked.lat);
+                hint.textContent = 'Asking…';
+
+                const query = new URLSearchParams({lat: clicked.lat.toFixed(5), lon: clicked.lng.toFixed(5)});
+                fetch(config.url + '?' + query, {
+                    credentials: 'same-origin',
+                    headers: {Accept: 'application/json'},
+                    signal: controller.signal
+                }).then(function (response) {
+                    return response.text().then(function (text) {
+                        hint.textContent = '';
+                        show(response.status, text, clicked);
+                    });
+                }).catch(function (error) {
+                    if (error.name === 'AbortError') {
+                        return;
+                    }
+                    hint.textContent = '';
+                    fail('Request failed — ' + error.message);
+                });
+            });
+        });
+    </script>
 {% endblock %}

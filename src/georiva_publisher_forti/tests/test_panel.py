@@ -672,6 +672,24 @@ class InspectPageTests(TestCase):
 
         self.assertContains(self.client.get(self.url), "/api/forecast/ecmwf-ifs/")
 
+    def test_try_it_is_handed_the_consumer_url_the_bbox_and_that_it_is_servable(self):
+        self.sign_in()
+
+        try_it = self.client.get(self.url).context["try_it"]
+
+        self.assertEqual(try_it["url"], "/api/forecast/ecmwf-ifs/")
+        self.assertEqual(try_it["bbox"], list(self.publication.bbox))
+        self.assertTrue(try_it["servable"])
+
+    def test_try_it_is_not_servable_before_anything_is_published(self):
+        FortiPublication.objects.filter(pk=self.publication.pk).update(published_version=None)
+        self.sign_in()
+
+        response = self.client.get(self.url)
+
+        self.assertFalse(response.context["try_it"]["servable"])
+        self.assertContains(response, "Nothing is published yet")
+
     def test_an_operator_who_may_change_it_is_offered_mapping_and_rebuild(self):
         self.sign_in()
 
