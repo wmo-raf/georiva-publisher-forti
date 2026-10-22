@@ -295,8 +295,14 @@
 {% block extra_js %}
     {{ block.super }}
     <script src="{% static 'js/vendor/maplibre-gl.js' %}"></script>
+    {% comment %}
+        The basemap is core's shared style — one file holding Light and Dark and
+        their borders and labels, flipped by group. Nothing of it lives here, so a
+        change to the style reaches this map with the next core.
+    {% endcomment %}
+    <script src="{% static 'js/georiva-basemap.js' %}"></script>
     <script>
-        document.addEventListener('DOMContentLoaded', function () {
+        document.addEventListener('DOMContentLoaded', async function () {
             const config = JSON.parse(document.getElementById('fi-tryit-data').textContent);
             const [west, south, east, north] = config.bbox;
 
@@ -307,20 +313,17 @@
             const rawWrap = document.getElementById('fi-tryit-raw-wrap');
             const raw = document.getElementById('fi-tryit-raw');
 
+            let style;
+            try {
+                style = await GeoRivaBasemap.load('{% static "basemap/georiva-basemap.json" %}', {basemap: 'light'});
+            } catch (error) {
+                fail('The basemap could not be loaded — ' + error.message);
+                return;
+            }
+
             const map = new maplibregl.Map({
                 container: 'fi-tryit-map',
-                style: {
-                    version: 8,
-                    sources: {
-                        basemap: {
-                            type: 'raster',
-                            tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'],
-                            tileSize: 256,
-                            attribution: 'Tiles © Esri'
-                        }
-                    },
-                    layers: [{id: 'basemap', type: 'raster', source: 'basemap'}]
-                },
+                style: style,
                 bounds: [[west, south], [east, north]],
                 fitBoundsOptions: {padding: 24}
             });
@@ -337,12 +340,13 @@
                         }
                     }
                 });
+                /* Before the anchor: above the ground, below the borders and labels. */
                 map.addLayer({
                     id: 'bbox-line',
                     type: 'line',
                     source: 'bbox',
                     paint: {'line-color': '#007d7e', 'line-width': 2}
-                });
+                }, GeoRivaBasemap.anchorId);
             });
 
             let marker = null;

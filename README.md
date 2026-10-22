@@ -57,6 +57,12 @@ core's abstract base, protects it with core's append-only migration operation,
 and runs its tasks on core's task base classes, so on an older core it does not
 import at all.
 
+The inspect page's "Try it" map draws on core's shared basemap style, loading
+core's `js/georiva-basemap.js` and `basemap/georiva-basemap.json` rather than
+carrying a copy. That needs the core release that ships them — **TODO: version
+once released**. On a core without them the map is not drawn and the page says
+so; everything else on it works.
+
 ## What it writes
 
 ```

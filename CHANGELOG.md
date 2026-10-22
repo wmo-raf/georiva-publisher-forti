@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### The Try it map uses core's basemap
+
+The "Try it" map on the publication inspect page now draws core's shared
+basemap — Light, with borders, coastline and labels — in place of an Esri
+street-map raster. The style is core's, loaded from its static files, so it
+needs the core release that ships `js/georiva-basemap.js` and
+`basemap/georiva-basemap.json` (see README, "Which core it needs"). On an older
+core the map is not drawn; the rest of the page is unaffected.
+
 ### The published version jumps by two orders of magnitude, once
 
 The published version is now `run.version × 100 + generation`
