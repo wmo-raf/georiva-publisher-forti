@@ -266,6 +266,14 @@ class FortiPublicationInspectView(InspectView):
         context["history"] = history.report(self.object)
         context["mapping_url"] = reverse("forti_publication_mapping", args=[self.object.pk])
         context["queue_rebuild_url"] = reverse("forti_publication_queue_rebuild", args=[self.object.pk])
+        context["try_it"] = {
+            "url": reverse("georiva_publisher_forti:forecast", args=[self.object.slug]),
+            "bbox": list(self.object.bbox),
+            # Published, not resident: residency is a read of the serving plane
+            # and this page makes none. A published model that is not loaded
+            # answers 503 on the first click, and the panel says so.
+            "servable": self.object.published_version is not None,
+        }
         context["can_change"] = can_change(self.request.user)
         context["incomplete_label"] = forms.INCOMPLETE_LABEL
         return context
