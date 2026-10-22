@@ -13,7 +13,9 @@ classifiers = []
 # `georiva` (the core) is deliberately not listed: it is provided by the runtime
 # environment — the GeoRiva image, or the uv workspace where core is a sibling
 # member of the same virtualenv. numpy and rasterio come from core too.
-# Needs core 0.5.0 or later: the Domain events extension point (see README).
+# Needs core 0.5.0 or later: the Domain events extension point (see README). The
+# inspect page's Try it map also loads core's shared basemap (README, "Which
+# core it needs").
 dependencies = []
 
 [project.urls]
