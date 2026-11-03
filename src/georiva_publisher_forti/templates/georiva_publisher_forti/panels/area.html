@@ -1,0 +1,235 @@
+{% load i18n static %}
+{% comment %}
+    The Area panel. One of three ways to say the box, never more than one on
+    screen: a country, a sample item, or the four numbers. The mode is not
+    stored; it is inferred on load (a saved or refused area opens in Custom,
+    a new one in Country).
+
+    Nothing here is stored. The four inputs (Wagtail's own, via the include
+    below) are what the form posts, shown only in Custom and held hidden
+    otherwise. The map and the caption only read them. Classes are prefixed
+    `fa-` for the reason the other panels give theirs.
+{% endcomment %}
+<style>
+    .fa-modes { display: inline-flex; border: 1px solid var(--w-color-border-field-default); border-radius: 4px; overflow: hidden; margin: 0 0 1em; }
+    .fa-modes button { border: 0; background: transparent; padding: 0.5em 1em; font: inherit; cursor: pointer; color: inherit; }
+    .fa-modes button + button { border-left: 1px solid var(--w-color-border-field-default); }
+    .fa-modes button[aria-checked="true"] { background: var(--w-color-primary); color: #fff; }
+    .fa-pick { max-width: 32em; margin: 0 0 1em; }
+    .fa-pick label { display: block; font-weight: 600; margin: 0 0 0.3em; }
+    .fa-pick input, .fa-pick select { width: 100%; box-sizing: border-box; }
+    .fa-note { color: var(--w-color-grey-400); margin: 0.3em 0 0; font-size: 0.9em; }
+    .fa-error { color: var(--w-color-critical-100, #cd3238); margin: 0.3em 0 0; font-weight: 600; }
+    .fa-caption { margin: 0.6em 0; color: var(--w-color-grey-400); font-size: 0.9em; max-width: 48em; }
+    .fa-map { height: 18em; max-width: 48em; border: 1px solid var(--w-color-border-field-default); border-radius: 4px; }
+    .fa-locked { max-width: 48em; }
+</style>
+
+{% if not locked %}
+    <div class="fa-modes" id="fa-modes" role="radiogroup" aria-label="{% trans 'How to set the area' %}">
+        <button type="button" role="radio" data-mode="country" aria-checked="false">{% trans "Country" %}</button>
+        <button type="button" role="radio" data-mode="item" aria-checked="false">{% trans "Collection item" %}</button>
+        <button type="button" role="radio" data-mode="custom" aria-checked="false">{% trans "Custom" %}</button>
+    </div>
+
+    <div class="fa-pick" id="fa-pick-country" hidden>
+        <label for="fa-country">{% trans "Country" %}</label>
+        <select id="fa-country">
+            <option value="">{% trans "— choose a country —" %}</option>
+        </select>
+        <p class="fa-note">{% blocktrans %}The country's extent plus {{ margin }}° on every side.{% endblocktrans %}</p>
+    </div>
+    <div class="fa-pick" id="fa-pick-item" hidden>
+        <label for="fa-item">{% trans "Collection item" %}</label>
+        <select id="fa-item" disabled>
+            <option value="">{% trans "— choose a collection first —" %}</option>
+        </select>
+        <p class="fa-note">{% trans "The footprint of the collection's data, exactly." %}</p>
+    </div>
+    <p class="fa-error" id="fa-error" role="alert" hidden></p>
+
+    <div id="fa-custom" hidden>
+        {% include "wagtailadmin/panels/multi_field_panel.html" %}
+    </div>
+{% else %}
+    <p class="fa-locked">{% trans "The area is fixed after the first publish." %}</p>
+    <div hidden>{% include "wagtailadmin/panels/multi_field_panel.html" %}</div>
+{% endif %}
+
+<div class="fa-map" id="fa-map" role="img" aria-label="{% trans 'Preview of the area' %}"></div>
+<p class="fa-caption" id="fa-caption" aria-live="polite"></p>
+
+{{ countries|json_script:"fa-countries" }}
+<link rel="stylesheet" href="{% static 'css/vendor/maplibre-gl.css' %}">
+<script src="{% static 'js/vendor/maplibre-gl.js' %}"></script>
+<script src="{% static 'js/georiva-basemap.js' %}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', async function () {
+        const locked = {{ locked|yesno:"true,false" }};
+        const saved = {{ saved|yesno:"true,false" }};
+        const hasErrors = {{ has_errors|yesno:"true,false" }};
+        const margin = {{ margin|stringformat:"f" }};
+        const itemsUrl = '{{ items_url|escapejs }}';
+        const names = ['west', 'south', 'east', 'north'];
+        const labels = ['West', 'South', 'East', 'North'];
+        const edges = names.map(function (n) { return document.getElementById('id_' + n); });
+        if (edges.some(function (e) { return !e; })) { return; }
+
+        const captionEl = document.getElementById('fa-caption');
+        const fmt = function (x) { return String(Math.round(x * 100) / 100).replace('-', '−'); };
+        const read = function () {
+            const v = edges.map(function (e) { return parseFloat(e.value); });
+            const [w, s, e, n] = v;
+            return v.every(isFinite) && e > w && n > s ? v : null;
+        };
+        const km = function (b) {
+            const lat = (b[1] + b[3]) / 2;
+            return [(b[2] - b[0]) * 111.32 * Math.cos(lat * Math.PI / 180), (b[3] - b[1]) * 110.57];
+        };
+        const geo = function (b) {
+            const [w, s, e, n] = b;
+            return {type: 'Feature', geometry: {type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}};
+        };
+
+        let map = null, ready = false;
+        function refresh() {
+            const b = read();
+            if (!b) { captionEl.textContent = ''; }
+            else {
+                const [wk, hk] = km(b);
+                captionEl.textContent = labels.map(function (l, i) { return l + ' ' + fmt(b[i]); }).join(' · ')
+                    + ' (≈ ' + Math.round(wk).toLocaleString() + ' × ' + Math.round(hk).toLocaleString() + ' km)';
+            }
+            if (map && ready) {
+                map.getSource('area').setData(geo(b || [0, 0, 0, 0]));
+                if (b) { map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {padding: 24, animate: false}); }
+            }
+        }
+        const write = function (bbox, pad) {
+            const [w, s, e, n] = bbox;
+            const v = [w - pad, s - pad, e + pad, n + pad].map(function (x) { return Math.round(x * 1e4) / 1e4; });
+            edges.forEach(function (input, i) { input.value = v[i]; });
+            clearError();
+            refresh();
+        };
+        edges.forEach(function (e) { e.addEventListener('input', refresh); });
+
+        const errorEl = document.getElementById('fa-error');
+        function clearError() { if (errorEl) { errorEl.hidden = true; } }
+
+        if (!locked) {
+            const modeBox = document.getElementById('fa-modes');
+            const panes = {
+                country: document.getElementById('fa-pick-country'),
+                item: document.getElementById('fa-pick-item'),
+                custom: document.getElementById('fa-custom'),
+            };
+            const countries = JSON.parse(document.getElementById('fa-countries').textContent);
+            const countrySelect = document.getElementById('fa-country');
+            const itemSelect = document.getElementById('fa-item');
+            let mode = null, items = [];
+            const picked = {country: false, item: false};
+
+            const setMode = function (next) {
+                mode = next;
+                modeBox.querySelectorAll('button').forEach(function (b) {
+                    b.setAttribute('aria-checked', b.dataset.mode === next ? 'true' : 'false');
+                });
+                Object.keys(panes).forEach(function (k) { panes[k].hidden = k !== next; });
+                clearError();
+            };
+            modeBox.addEventListener('click', function (ev) {
+                const b = ev.target.closest('button[data-mode]');
+                if (b) { setMode(b.dataset.mode); }
+            });
+
+            // Country: a plain select; typing a name jumps to it.
+            countries.forEach(function (c, i) {
+                const o = document.createElement('option');
+                o.value = i; o.textContent = c.name; countrySelect.appendChild(o);
+            });
+            countrySelect.addEventListener('change', function () {
+                picked.country = countrySelect.value !== '';
+                if (picked.country) { write(countries[countrySelect.value].bbox, margin); }
+            });
+
+            // Item: the list belongs to the collection; changing it clears the pick.
+            const collection = document.getElementById('id_collection');
+            const load = async function () {
+                itemSelect.length = 1;
+                items = [];
+                picked.item = false;
+                if (!collection || !collection.value) {
+                    itemSelect.disabled = true;
+                    itemSelect.options[0].textContent = '— choose a collection first —';
+                    return;
+                }
+                try {
+                    const r = await fetch(itemsUrl + '?collection=' + encodeURIComponent(collection.value), {credentials: 'same-origin'});
+                    items = (await r.json()).items;
+                } catch (err) { items = []; }
+                itemSelect.disabled = !items.length;
+                itemSelect.options[0].textContent = items.length ? '— choose —' : '— no items with a footprint —';
+                items.forEach(function (it, i) {
+                    const o = document.createElement('option');
+                    o.value = i; o.textContent = it.label; itemSelect.appendChild(o);
+                });
+            };
+            itemSelect.addEventListener('change', function () {
+                picked.item = itemSelect.value !== '';
+                if (picked.item) { write(items[itemSelect.value].bbox, 0); }
+            });
+            if (collection) {
+                collection.addEventListener('change', load);
+                // Wagtail may wrap the select in a widget that fires its own event.
+                collection.addEventListener('input', load);
+            }
+            load();
+
+            // Nothing picked blocks the submit; the server refuses it too. A
+            // hidden empty required input stops the browser before `submit`
+            // fires, so its `invalid` event is heard as well.
+            const message = function () {
+                if (mode === 'country' && !picked.country) { return '{% trans "Choose a country" as m %}{{ m|escapejs }}'; }
+                if (mode === 'item' && !picked.item) { return '{% trans "Choose an item" as m %}{{ m|escapejs }}'; }
+                return '';
+            };
+            const block = function (ev) {
+                const m = message();
+                if (!m) { return; }
+                ev.preventDefault();
+                errorEl.textContent = m;
+                errorEl.hidden = false;
+            };
+            const form = edges[0].form;
+            if (form) {
+                form.addEventListener('submit', block, true);
+                form.addEventListener('invalid', function (ev) {
+                    if (edges.indexOf(ev.target) !== -1) { block(ev); }
+                }, true);
+            }
+
+            // Inferred, not stored: a stored or refused area shows its numbers;
+            // a new one starts from a country, with nothing picked.
+            const filled = edges.some(function (e) { return e.value !== ''; });
+            setMode(saved || hasErrors || filled ? 'custom' : 'country');
+        }
+
+        try {
+            const style = await GeoRivaBasemap.load('{% static "basemap/georiva-basemap.json" %}', {basemap: 'light'});
+            map = new maplibregl.Map({container: 'fa-map', style: style, center: [20, 5], zoom: 2});
+            map.addControl(new maplibregl.NavigationControl({showCompass: false}), 'top-right');
+            map.on('load', function () {
+                map.addSource('area', {type: 'geojson', data: geo([0, 0, 0, 0])});
+                const before = map.getLayer('georiva-data-anchor') ? 'georiva-data-anchor' : undefined;
+                map.addLayer({id: 'area-fill', type: 'fill', source: 'area', paint: {'fill-color': '#007d7e', 'fill-opacity': 0.15}}, before);
+                map.addLayer({id: 'area-line', type: 'line', source: 'area', paint: {'line-color': '#007d7e', 'line-width': 2}}, before);
+                ready = true;
+                refresh();
+            });
+        } catch (err) {
+            document.getElementById('fa-map').textContent = 'The basemap could not be loaded.';
+        }
+        refresh();
+    });
+</script>

@@ -56,6 +56,7 @@ from georiva.core.models import Variable
 
 from . import mapping
 from . import parameters as params
+from .area import AREA_FIELDS, locked_extent_error
 from .models import FortiVariableMapping
 from .prose import listed
 
@@ -218,11 +219,32 @@ class FortiPublicationForm(WagtailAdminModelForm):
     slots are already filled from the one it has.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Read-only is the page's half of the lock; ``clean()`` is the half that
+        # a request not made from the page meets. ``readonly`` and not
+        # ``disabled``, so the stored value still posts and still validates.
+        if self.instance and self.instance.pk and self.instance.grid_id:
+            for name in AREA_FIELDS:
+                self.fields[name].widget.attrs["readonly"] = True
+
     def clean(self):
         cleaned = super().clean()
         if self.instance and self.instance.pk:
             self._refuse_stranding_the_mapping(cleaned)
+            self._refuse_moving_the_area(cleaned)
         return cleaned
+
+    def _refuse_moving_the_area(self, cleaned) -> None:
+        """The area does not move once a grid is pinned.
+
+        The grid is fingerprinted at the first build and a moved one is refused
+        there — at the next run, where nobody is looking. Refused here instead,
+        where the operator is. The Area panel renders read-only in this state,
+        so this is the half that a crafted request meets.
+        """
+        for name, message in locked_extent_error(self.instance, cleaned).items():
+            self.add_error(name, message)
 
     def _refuse_stranding_the_mapping(self, cleaned) -> None:
         """A filled mapping does not follow its publication to another collection.
