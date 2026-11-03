@@ -5,14 +5,10 @@ The publication's extent is four floats and stays four floats — the model, its
 around them: a list of countries to start from, the footprints of the collection's
 own recent items, and the panel that renders both beside the inputs.
 
-Two sources, and the difference between them is a decision, not a detail:
-
-* A **country** is a place to start, so it is padded by :data:`COUNTRY_MARGIN`
-  degrees — a point forecast for a border town is asked for from both sides of
-  the border, and an area that stops at the line answers "outside coverage" to
-  half of them (the same reason ``seed_extent_from_catalog`` pads).
-* An **item** is the footprint of data that exists, so it is taken exactly. Padding
-  it would claim points the collection has no values for.
+Two sources, both taken exactly. An area is only worth what the collection has
+values for, so neither is padded: a margin past the data would be points that
+answer "outside coverage". A **country** is its own bounding box, a place to
+start; an **item** is the footprint of data that exists.
 
 Nothing here is stored. Picking fills the inputs and the inputs are what is
 saved, so a stale list can mislead an operator for a moment and cannot corrupt
@@ -28,10 +24,6 @@ from wagtail.admin.panels import FieldPanel, MultiFieldPanel
 
 from georiva.core.models import Item
 
-#: Degrees added to every side of a picked country. Matches
-#: :meth:`~.models.FortiPublication.seed_extent_from_catalog`.
-COUNTRY_MARGIN = 0.5
-
 AREA_FIELDS = ("west", "south", "east", "north")
 
 #: How many distinct footprints the item picker shows.
@@ -46,8 +38,7 @@ ITEM_WINDOW = 300
 def country_extents() -> list[dict]:
     """Every country with a known extent, as ``{code, name, bbox}`` by name.
 
-    ``bbox`` is the country's own, unpadded: the margin is applied where the
-    pick happens, so what the page shows can say what was added.
+    ``bbox`` is the country's own, as the picker writes it.
     """
     found = []
     for entry in countries:
@@ -111,7 +102,6 @@ class AreaPanel(MultiFieldPanel):
             instance = self.instance
             context.update(
                 countries=country_extents(),
-                margin=COUNTRY_MARGIN,
                 locked=bool(instance and instance.pk and instance.grid_id),
                 # Where the page starts: a stored area opens in Custom, and so
                 # does a form the server sent back with an edge refused — the

@@ -385,7 +385,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
             AreaPanel(
                 heading="Area",
                 help_text=(
-                    "The area the forecast covers. Include a margin past your borders. "
+                    "The area the forecast covers. Pick a country or a sample item to start from. "
                     "Cannot be changed after the first publish."
                 ),
             ),
