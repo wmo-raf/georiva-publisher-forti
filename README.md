@@ -471,9 +471,12 @@ left that varies with the tenant set, so there is nothing to generate.
 
 ### The images
 
-`forti-rawdataforecaster:v0.8.1-wmo.1` and `forti-jsonfrontend:v0.8.1-wmo.1`,
-built from `wmo-raf/forti` `develop`. The tag is the upstream release plus the
-fork's revision, so it says both what it is and that it is not stock.
+`ghcr.io/wmo-raf/forti/rawdataforecaster:v0.8.1-wmo.1` and
+`ghcr.io/wmo-raf/forti/jsonfrontend:v0.8.1-wmo.1`, published by `wmo-raf/forti`'s
+release workflow when it is given the `v0.8.1-wmo.1` tag on `develop`. The tag is
+the upstream release plus the fork's revision, so it says both what it is and
+that it is not stock. A server pulls them; nothing builds on it. Override with
+`FORTI_RAWDATAFORECASTER_IMAGE` / `FORTI_JSONFRONTEND_IMAGE`.
 
 There was an earlier pair tagged **`:spike`**, built during M0 from the same
 sources at a different commit. Both tags, and the two stopped containers still

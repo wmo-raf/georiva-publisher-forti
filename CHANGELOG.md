@@ -5,6 +5,14 @@
 First installable release. Needs GeoRiva core 0.5.0 or later, and the Forti
 serving pair from `wmo-raf/forti` at `v0.8.1-wmo.1` (see `deploy/compose.yml`).
 
+### The serving pair is pulled from ghcr
+
+`deploy/compose.yml` now defaults to
+`ghcr.io/wmo-raf/forti/rawdataforecaster:v0.8.1-wmo.1` and
+`ghcr.io/wmo-raf/forti/jsonfrontend:v0.8.1-wmo.1`, rather than local image names
+that only existed on the machine that built them, so an image-only server can
+start the pair.
+
 ### Signed-in callers get a larger rate limit
 
 `GET /api/forecast/` and `GET /api/forecast/{model}/` now throttle anonymous
