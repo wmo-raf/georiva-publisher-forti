@@ -59,8 +59,7 @@ import at all.
 
 The inspect page's "Try it" map draws on core's shared basemap style, loading
 core's `js/georiva-basemap.js` and `basemap/georiva-basemap.json` rather than
-carrying a copy. That needs the core release that ships them — **TODO: version
-once released**. On a core without them the map is not drawn and the page says
+carrying a copy. That needs the core release that ships them — **0.5.0**. On a core without them the map is not drawn and the page says
 so; everything else on it works.
 
 ## What it writes
@@ -502,7 +501,8 @@ so core ships no `GEORIVA_FORTI_*` setting at all.
 | `GEORIVA_FORTI_JSONFRONTEND_HOST` | `forti-jsonfrontend` | the service name in `deploy/compose.yml` |
 | `GEORIVA_FORTI_JSONFRONTEND_PORT` | `8080` | |
 | `GEORIVA_FORTI_TIMEOUT` | `5` | seconds; jsonfrontend gives its own upstream 1.5 s |
-| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | per caller per organisation; `None` disables |
+| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | anonymous callers, per IP per organisation; `None` disables |
+| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED` | `"600/min"` | signed-in callers (session or `grv_…` key), per user per organisation; `None` disables. Give an NMHS website a key rather than raising the anonymous rate |
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be shared |
 | `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the verification panel and the publications listing give the bucket, all reads together |
 

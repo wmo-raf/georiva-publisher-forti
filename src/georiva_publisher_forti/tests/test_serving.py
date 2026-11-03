@@ -585,6 +585,54 @@ class ThrottleTests(ServingTestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_an_authenticated_caller_has_a_larger_allowance_than_an_anonymous_one(self):
+        """A key-holding website must not be limited like a person trying the API."""
+        served_model()
+        user = get_user_model().objects.create_user(
+            username="site", email="site@example.test", password="forti-serving-test-pw"
+        )
+        join_org(user, self.org_slug)
+
+        with override_settings(
+            GEORIVA_FORTI_FORECAST_THROTTLE_RATE="1/min",
+            GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED="3/min",
+        ):
+            with patch("georiva_publisher_forti.serving.requests.get", return_value=FakeResponse(DOCUMENT)):
+                anonymous = [self.forecast().status_code for _ in range(2)]
+                self.client.force_login(user)
+                signed_in = [self.forecast().status_code for _ in range(4)]
+
+        self.assertEqual(anonymous, [200, 429])
+        self.assertEqual(signed_in, [200, 200, 200, 429])
+
+    def test_the_authenticated_tier_can_be_turned_off_on_its_own(self):
+        served_model()
+        user = get_user_model().objects.create_user(
+            username="site", email="site@example.test", password="forti-serving-test-pw"
+        )
+        join_org(user, self.org_slug)
+        self.client.force_login(user)
+
+        with override_settings(
+            GEORIVA_FORTI_FORECAST_THROTTLE_RATE="1/min",
+            GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED=None,
+        ):
+            with patch("georiva_publisher_forti.serving.requests.get", return_value=FakeResponse(DOCUMENT)):
+                statuses = {self.forecast().status_code for _ in range(3)}
+
+        self.assertEqual(statuses, {200})
+
+    def test_a_throttled_response_says_when_to_retry(self):
+        served_model()
+
+        with override_settings(GEORIVA_FORTI_FORECAST_THROTTLE_RATE="1/min"):
+            with patch("georiva_publisher_forti.serving.requests.get", return_value=FakeResponse(DOCUMENT)):
+                self.forecast()
+                throttled = self.forecast()
+
+        self.assertEqual(throttled.status_code, 429)
+        self.assertTrue(throttled.has_header("Retry-After"))
+
     def test_one_organisation_s_traffic_does_not_spend_another_s_allowance(self):
         """Anonymous callers are keyed on IP, so two tenants behind one NAT would
         otherwise share a bucket."""
