@@ -78,6 +78,12 @@ DEFAULT_TIMEOUT = 5
 #: :class:`ForecastThrottle`.
 DEFAULT_THROTTLE_RATE = "60/min"
 
+#: The same throttle for a caller who authenticated (a session, or a ``grv_…`` API
+#: key — either way a user). An NMHS website calls this server-side from one
+#: address, so it is told to hold a key; an anonymous allowance sized for a
+#: person trying it out would make that the first thing to hit the limit.
+DEFAULT_AUTHENTICATED_THROTTLE_RATE = "600/min"
+
 #: Seconds a *public* model's response may be shared. §6 records met.no's
 #: production ``data_expiry_offset`` as 1800 and that is where this number comes
 #: from, but it is deliberately **not** :data:`jsonformat.DATA_EXPIRY_OFFSET`:
@@ -145,6 +151,25 @@ class ForecastThrottle(SimpleRateThrottle):
 
     def get_rate(self):
         return getattr(settings, "GEORIVA_FORTI_FORECAST_THROTTLE_RATE", DEFAULT_THROTTLE_RATE)
+
+    def get_authenticated_rate(self):
+        return getattr(
+            settings,
+            "GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED",
+            DEFAULT_AUTHENTICATED_THROTTLE_RATE,
+        )
+
+    def allow_request(self, request, view):
+        # DRF resolves the rate once, in ``__init__``, before there is a request
+        # to ask who is calling. The tier is per request, so it is settled here
+        # and the parent's counter runs unchanged against it. The two tiers
+        # never share a bucket (the key carries ``user:`` or ``ip:``), so a
+        # signed-in caller's allowance is not spent by anonymous traffic.
+        user = getattr(request, "user", None)
+        if user is not None and user.is_authenticated:
+            self.rate = self.get_authenticated_rate()
+            self.num_requests, self.duration = self.parse_rate(self.rate)
+        return super().allow_request(request, view)
 
     def get_cache_key(self, request, view):
         user = getattr(request, "user", None)

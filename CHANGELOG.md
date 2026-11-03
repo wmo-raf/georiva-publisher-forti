@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.1.0
+
+First installable release. Needs GeoRiva core 0.5.0 or later, and the Forti
+serving pair from `wmo-raf/forti` at `v0.8.1-wmo.1` (see `deploy/compose.yml`).
+
+### Signed-in callers get a larger rate limit
+
+`GET /api/forecast/` and `GET /api/forecast/{model}/` now throttle anonymous
+callers at 60/min (per IP, per organisation) and signed-in callers — a session
+or a `grv_…` API key — at 600/min (per user, per organisation). The second tier
+is `GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED`; set either to `None` to
+turn that tier off. A throttled response is a 429 with `Retry-After`. An NMHS
+website should hold a key rather than have the anonymous rate raised.
 
 ### The Try it map uses core's basemap
 
