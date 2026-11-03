@@ -132,7 +132,7 @@ services:
   # Reads the published areas straight off the bucket and answers
   # Get(latitude, longitude, areas...). One process, every tenant.
   forti-rawdataforecaster:
-    image: ${FORTI_RAWDATAFORECASTER_IMAGE:-forti-rawdataforecaster:v0.8.1-wmo.1}
+    image: ${FORTI_RAWDATAFORECASTER_IMAGE:-ghcr.io/wmo-raf/forti/rawdataforecaster:v0.8.1-wmo.1}
     restart: unless-stopped
     # Watches its config in place. An earlier draft said it "reads its config
     # once at startup" and that adding an area needed `docker compose restart`.
@@ -170,7 +170,7 @@ services:
   # is the upstream the plugin's view dials, so it is fixed rather than derived
   # — there is no slug in it any more and no registry to fall out of step with.
   forti-jsonfrontend:
-    image: ${FORTI_JSONFRONTEND_IMAGE:-forti-jsonfrontend:v0.8.1-wmo.1}
+    image: ${FORTI_JSONFRONTEND_IMAGE:-ghcr.io/wmo-raf/forti/jsonfrontend:v0.8.1-wmo.1}
     restart: unless-stopped
     command:
       - -upstream
