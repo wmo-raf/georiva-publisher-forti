@@ -97,6 +97,7 @@ from georiva.organisations.access import get_org_object_or_404
 from georiva.organisations.scoping import OrgScopedViewSetMixin
 
 from . import forms, history, readiness, verification
+from .area import AreaPanel, recent_item_extents
 from .models import FortiPublication
 
 SNIPPET = "wagtailsnippets_georiva_publisher_forti_fortipublication"
@@ -381,13 +382,7 @@ class FortiPublicationViewSet(OrgScopedViewSetMixin, SnippetViewSet):
                 heading="Forecast",
                 help_text="Which collection to publish, and what to call it in the Forti app.",
             ),
-            MultiFieldPanel(
-                [
-                    FieldPanel("west"),
-                    FieldPanel("south"),
-                    FieldPanel("east"),
-                    FieldPanel("north"),
-                ],
+            AreaPanel(
                 heading="Area",
                 help_text=(
                     "The area the forecast covers. Include a margin past your borders. "
@@ -424,6 +419,11 @@ def register_forti_admin_urls():
             name="forti_publication_queue_rebuild",
         ),
         path(
+            "forti/area/items/",
+            area_items,
+            name="forti_area_items",
+        ),
+        path(
             "forti/serving/",
             verification_panel,
             name="forti_verification_panel",
@@ -454,6 +454,25 @@ def register_forti_serving_menu_item():
         icon_name="site",
         order=130,
     )
+
+
+def area_items(request):
+    """The distinct footprints of one collection's recent items, as JSON.
+
+    Feeds the Area panel's "sample item" chooser. The collection is resolved
+    through the organisation scope, so a collection of another organisation is
+    absent here exactly as it is in the chooser it is asked from.
+    """
+    from django.http import Http404, JsonResponse
+
+    from georiva.core.models import Collection
+
+    try:
+        pk = int(request.GET.get("collection", ""))
+    except ValueError:
+        raise Http404 from None
+    collection = get_org_object_or_404(request, Collection, pk=pk)
+    return JsonResponse({"items": recent_item_extents(collection)})
 
 
 def verification_panel(request):
