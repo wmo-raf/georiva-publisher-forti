@@ -37,7 +37,7 @@
         <select id="fa-country">
             <option value="">{% trans "— choose a country —" %}</option>
         </select>
-        <p class="fa-note">{% blocktrans %}The country's extent plus {{ margin }}° on every side.{% endblocktrans %}</p>
+        <p class="fa-note">{% trans "The country's own bounding box." %}</p>
     </div>
     <div class="fa-pick" id="fa-pick-item" hidden>
         <label for="fa-item">{% trans "Collection item" %}</label>
@@ -68,7 +68,6 @@
         const locked = {{ locked|yesno:"true,false" }};
         const saved = {{ saved|yesno:"true,false" }};
         const hasErrors = {{ has_errors|yesno:"true,false" }};
-        const margin = {{ margin|stringformat:"f" }};
         const itemsUrl = '{{ items_url|escapejs }}';
         const names = ['west', 'south', 'east', 'north'];
         const labels = ['West', 'South', 'East', 'North'];
@@ -105,9 +104,8 @@
                 if (b) { map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {padding: 24, animate: false}); }
             }
         }
-        const write = function (bbox, pad) {
-            const [w, s, e, n] = bbox;
-            const v = [w - pad, s - pad, e + pad, n + pad].map(function (x) { return Math.round(x * 1e4) / 1e4; });
+        const write = function (bbox) {
+            const v = bbox.map(function (x) { return Math.round(x * 1e4) / 1e4; });
             edges.forEach(function (input, i) { input.value = v[i]; });
             clearError();
             refresh();
@@ -150,7 +148,7 @@
             });
             countrySelect.addEventListener('change', function () {
                 picked.country = countrySelect.value !== '';
-                if (picked.country) { write(countries[countrySelect.value].bbox, margin); }
+                if (picked.country) { write(countries[countrySelect.value].bbox); }
             });
 
             // Item: the list belongs to the collection; changing it clears the pick.
@@ -177,7 +175,7 @@
             };
             itemSelect.addEventListener('change', function () {
                 picked.item = itemSelect.value !== '';
-                if (picked.item) { write(items[itemSelect.value].bbox, 0); }
+                if (picked.item) { write(items[itemSelect.value].bbox); }
             });
             if (collection) {
                 collection.addEventListener('change', load);

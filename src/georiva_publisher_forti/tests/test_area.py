@@ -13,7 +13,7 @@ from django.urls import reverse
 
 from georiva.core.models import Item
 from georiva.organisations.testing import dial_org
-from georiva_publisher_forti.area import COUNTRY_MARGIN, country_extents, recent_item_extents
+from georiva_publisher_forti.area import country_extents, recent_item_extents
 
 from .factories import REFERENCE_TIME, make_collection, make_publication, make_user
 from .test_admin import EDIT_URL, publication_payload
@@ -30,9 +30,6 @@ class CountryTests(SimpleTestCase):
         self.assertLess(west, east)
         self.assertLess(south, north)
         self.assertTrue(33 < west < 35 and 41 < east < 42.5, by_code["KE"])
-
-    def test_the_margin_is_the_one_seeding_uses(self):
-        self.assertEqual(COUNTRY_MARGIN, 0.5)
 
 
 def make_item(collection, hours, bounds):
@@ -135,3 +132,16 @@ class LockTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "const hasErrors = true;")
+
+
+class NoPaddingTests(TestCase):
+    def test_no_padding_is_offered_on_the_page(self):
+        """A margin past the data is points with no values (the area follows the data's extent)."""
+        dial_org(self.client)
+        self.client.force_login(make_user("editor", superuser=True))
+
+        response = self.client.get(reverse("wagtailsnippets_georiva_publisher_forti_fortipublication:add"))
+
+        self.assertContains(response, "own bounding box.")
+        self.assertNotContains(response, "on every side")
+        self.assertNotIn("margin", response.context["form"].fields)
