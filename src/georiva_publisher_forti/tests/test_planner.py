@@ -143,6 +143,44 @@ class SourceValidationTests(PlannerTestCase):
 
         self.assertIn("tcc", str(ctx.exception))
 
+    def test_wind_gust_may_be_left_blank_and_is_left_out(self):
+        """Not every model writes a gust — WRF does not by default. Nothing derives
+        from it, so the rest publishes and the gust series is simply absent."""
+        self._remap("10fg", None)
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        publish_plan = plan(self.publication)
+
+        names = {parameter.name for parameter in publish_plan.parameters}
+        self.assertNotIn("wind_speed_of_gust", names)
+        self.assertIn("air_temperature_2m", names)
+        self.assertIn("weather_symbol_6h", names)
+        self.assertNotIn("10fg", publish_plan.hrefs)
+        self.assertNotIn("10fg", publish_plan.mapping)
+
+    def test_wind_gust_is_published_when_it_is_mapped(self):
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        names = {parameter.name for parameter in plan(self.publication).parameters}
+
+        self.assertIn("wind_speed_of_gust", names)
+
+    def test_a_mapped_wind_gust_in_the_wrong_unit_is_still_refused(self):
+        """Optional means it may be absent, not that it may be wrong."""
+        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
+        variable = self.collection.variables.get(slug="10fg")
+        variable.unit = kelvin
+        variable.save(update_fields=["unit"])
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("10fg", str(ctx.exception))
+
     def test_a_variable_in_the_wrong_unit_is_refused(self):
         kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
         variable = self.collection.variables.get(slug="2t")

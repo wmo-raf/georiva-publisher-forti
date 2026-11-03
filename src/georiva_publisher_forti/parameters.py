@@ -91,6 +91,13 @@ class Parameter:
     """Whether this is locationforecast's ``summary.symbol_code`` rather than a
     value under ``details``."""
 
+    optional: bool = False
+    """Whether a publication may go without it. An optional parameter whose slot
+    is blank is left out of ``meta.json`` — which a reader sees as the field
+    being absent, and locationforecast treats every ``details`` field as
+    optional. For a quantity some models simply do not produce; never for one
+    a derivation reads."""
+
     @property
     def is_derived(self) -> bool:
         return self.source is None
@@ -161,6 +168,9 @@ INSTANT_PARAMETERS = [
         locationforecast="wind_speed_of_gust",
         source="10fg",
         expects_unit="m/s",
+        # Not every model has one — WRF does not write it by default. Nothing
+        # derives from it, so leaving it out spoils no other series.
+        optional=True,
     ),
     Parameter(
         # Already percent out of GeoRiva: paramId 164 is a fraction in the GRIB
@@ -352,6 +362,11 @@ class Slot:
     """The span its values plausibly occupy, in :attr:`units`. A suspicion, not
     a rule — see :data:`PLAUSIBLE_RANGES`."""
 
+    optional: bool = False
+    """Whether a publication may leave it blank. True only when every parameter
+    that reads the slot is itself optional — a slot a required series or a
+    derivation needs is required, whatever else reads it."""
+
 
 def _build_slots() -> tuple[Slot, ...]:
     """The vocabulary, in the order the parameter map first reads each slot.
@@ -362,6 +377,7 @@ def _build_slots() -> tuple[Slot, ...]:
     """
     feeds: dict[str, list[str]] = {}
     units: dict[str, str] = {}
+    needed: set[str] = set()
 
     for parameter in ALL_PARAMETERS:
         keys = [parameter.source] if parameter.source else []
@@ -369,6 +385,8 @@ def _build_slots() -> tuple[Slot, ...]:
             keys.extend(DERIVATION_INPUTS[parameter.derivation])
         for key in keys:
             feeds.setdefault(key, [])
+            if not parameter.optional:
+                needed.add(key)
             if parameter.name not in feeds[key]:
                 feeds[key].append(parameter.name)
         if parameter.source and parameter.expects_unit:
@@ -395,7 +413,13 @@ def _build_slots() -> tuple[Slot, ...]:
         )
 
     return tuple(
-        Slot(key=key, units=units[key], feeds=tuple(names), plausible=PLAUSIBLE_RANGES[key])
+        Slot(
+            key=key,
+            units=units[key],
+            feeds=tuple(names),
+            plausible=PLAUSIBLE_RANGES[key],
+            optional=key not in needed,
+        )
         for key, names in feeds.items()
     )
 
@@ -406,6 +430,21 @@ SLOTS = _build_slots()
 BY_SLOT = {slot.key: slot for slot in SLOTS}
 
 SLOT_KEYS = tuple(slot.key for slot in SLOTS)
+
+#: The slots a publication cannot publish without. The rest may be left blank.
+REQUIRED_SLOT_KEYS = tuple(slot.key for slot in SLOTS if not slot.optional)
+
+
+def parameters_for(filled) -> list[Parameter]:
+    """The parameters a publication with these slots filled can publish.
+
+    Everything, less the optional series whose slot is blank. A required slot
+    is never blank here — the planner refuses that first — so what drops out is
+    only ever an optional one.
+    """
+    filled = set(filled)
+    return [parameter for parameter in ALL_PARAMETERS if not parameter.source or parameter.source in filled]
+
 
 #: For the model field. A literal list rather than the tuple above, because
 #: ``choices`` is frozen into a migration and a tuple would churn it.
