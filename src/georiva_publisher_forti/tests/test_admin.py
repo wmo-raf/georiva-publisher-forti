@@ -208,6 +208,14 @@ class MappingRenderTests(MappingEditorMixin, TestCase):
 
         self.assertContains(response, forms.INCOMPLETE_LABEL)
 
+    def test_a_blank_wind_gust_is_not_shown_as_incomplete(self):
+        self.publication.variable_mappings.filter(slot="10fg").update(variable=None)
+
+        response = self.client.get(self.url)
+
+        self.assertNotContains(response, 'class="fm-incomplete"')
+        self.assertContains(response, "optional")
+
     def test_a_fully_mapped_publication_is_not_shown_as_incomplete(self):
         self.assertNotContains(self.client.get(self.url), forms.INCOMPLETE_LABEL)
 

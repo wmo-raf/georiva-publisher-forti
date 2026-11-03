@@ -309,3 +309,17 @@ class ExtentSeedingTests(TestCase):
         publication = make_publication(make_collection())
 
         self.assertFalse(publication.seed_extent_from_catalog())
+
+
+class OptionalSlotTests(TestCase):
+    def test_only_wind_gust_is_optional(self):
+        from georiva_publisher_forti import parameters as params
+
+        self.assertEqual([slot.key for slot in params.SLOTS if slot.optional], ["10fg"])
+        self.assertNotIn("10fg", params.REQUIRED_SLOT_KEYS)
+
+    def test_a_blank_optional_slot_is_not_unmapped_but_a_blank_required_one_is(self):
+        publication = make_publication(make_collection())
+        publication.variable_mappings.filter(slot__in=["10fg", "tcc"]).update(variable=None)
+
+        self.assertEqual(publication.unmapped_slots(), ["tcc"])

@@ -53,6 +53,16 @@ class ReadinessTests(TestCase):
         self.assertEqual(self.finding(report, "runs").state, readiness.WAITING)
         self.assertEqual(report.state, readiness.WAITING)
 
+    def test_a_blank_wind_gust_does_not_stop_a_publication_being_ready(self):
+        """Optional by design: a model without a gust is not misconfigured."""
+        make_run(self.collection)
+        self.publication.variable_mappings.filter(slot="10fg").update(variable=None)
+
+        finding = self.finding(readiness.report(self.publication), "slots")
+
+        self.assertEqual(finding.state, readiness.READY)
+        self.assertIn("10fg is optional", finding.detail)
+
     def test_a_blank_slot_will_never_publish_on_its_own(self):
         """The other half of the distinction. Waiting fixes a run that has not
         closed; nothing fixes a slot nothing fills, and an operator told to wait

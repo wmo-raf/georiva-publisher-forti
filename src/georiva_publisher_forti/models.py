@@ -644,7 +644,11 @@ class FortiPublication(BuildDisciplinedModel):
         return {key: rows.get(key) for key in params.SLOT_KEYS}
 
     def unmapped_slots(self, mapped: dict | None = None) -> list[str]:
-        """The slots nothing fills, in vocabulary order.
+        """The *required* slots nothing fills, in vocabulary order.
+
+        An optional slot (wind gust: not every model has one) is left out of
+        this on purpose — blank is its ordinary state, and what asks "can this
+        publish?" must not count it. :meth:`mapped_variables` still lists it.
 
         A blank slot is allowed at save — a publication may be configured while
         its collection is still declaring its variables — and this is how it
@@ -655,7 +659,7 @@ class FortiPublication(BuildDisciplinedModel):
         ask a question the first read can answer.
         """
         mapped = self.mapped_variables() if mapped is None else mapped
-        return [key for key, variable in mapped.items() if variable is None]
+        return [key for key, variable in mapped.items() if variable is None and key in params.REQUIRED_SLOT_KEYS]
 
     def register_configuration_change(self) -> None:
         """Raise the generation and ask for a republish.

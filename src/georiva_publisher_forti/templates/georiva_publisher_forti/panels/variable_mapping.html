@@ -167,7 +167,7 @@
 <p class="fm-lead">
     {% blocktrans trimmed %}
         Choose which variable of the collection to publish as each Forti parameter. Rows were
-        pre-filled where the names matched. Publishing waits until every row is set.
+        pre-filled where the names matched. Publishing waits until every row not marked optional is set.
     {% endblocktrans %}
 </p>
 
@@ -208,6 +208,7 @@
                 <th scope="row" class="fm-slot">
                     <label for="{{ row.field.id_for_label }}"><code>{{ row.slot.key }}</code></label>
                     <span class="fm-units">{{ row.slot.units }}</span>
+                    {% if row.slot.optional %}<span class="fm-units">{% trans "optional" %}</span>{% endif %}
                 </th>
                 <td class="fm-feeds" id="{{ row.field.auto_id }}_helptext">{{ row.field.help_text }}</td>
                 <td class="fm-choice">

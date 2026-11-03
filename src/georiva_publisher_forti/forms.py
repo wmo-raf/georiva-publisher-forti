@@ -159,7 +159,8 @@ class Row:
 
     @property
     def incomplete(self) -> bool:
-        return not self.field.value()
+        # An optional slot left blank is a choice, not a gap.
+        return not self.field.value() and not self.slot.optional
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ class FortiPublicationForm(WagtailAdminModelForm):
         # Asked through the publication's own reading of its mapping rather than
         # by querying its rows from here: "how many slots are filled" is the
         # publication's question and it already answers the other half of it.
-        filled = len(params.SLOT_KEYS) - len(self.instance.unmapped_slots())
+        filled = sum(variable is not None for variable in self.instance.mapped_variables().values())
         if filled:
             self.add_error(
                 "collection",

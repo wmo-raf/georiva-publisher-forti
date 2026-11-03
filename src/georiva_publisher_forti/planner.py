@@ -160,7 +160,7 @@ def plan(publication) -> PublishPlan:
             f"resolves itself as the stragglers land."
         )
 
-    chosen = publishable(times, params.ALL_PARAMETERS)
+    chosen = publishable(times, params.parameters_for(by_slot))
     if not spans_a_period(chosen):
         raise NothingToPublish(
             f"{collection.slug} @ {stamp(run.reference_time)}: {len(times)} step(s) "
@@ -238,7 +238,10 @@ def _refuse_unpublishable_collection(collection) -> None:
 
 
 def _resolve_slots(publication) -> dict:
-    """``{slot key: Variable}`` — every slot filled, and every unit checked.
+    """``{slot key: Variable}`` — every required slot filled, and every unit checked.
+
+    An optional slot nothing fills is simply absent from the result, so the
+    series that read it are not built.
 
     Through the publication's own mapping rather than by slug. The rule the
     mapping is seeded with *is* the old exact-slug match, so a conventionally
@@ -267,10 +270,12 @@ def _resolve_slots(publication) -> dict:
     blank = publication.unmapped_slots(by_slot)
     if blank:
         raise PublicationRefused(
-            f"{publication.slug} has nothing mapped to {', '.join(blank)}. Every slot in the "
-            f"parameter map has to name a variable of {collection.slug} before this can "
+            f"{publication.slug} has nothing mapped to {', '.join(blank)}. Every required slot in "
+            f"the parameter map has to name a variable of {collection.slug} before this can "
             f"publish — fill the blank ones in on the publication."
         )
+    # What is left blank is optional, and is not part of this publish.
+    by_slot = {key: variable for key, variable in by_slot.items() if variable is not None}
 
     foreign = [
         f"{key} ← {variable.slug}" for key, variable in by_slot.items() if variable.collection_id != collection.pk

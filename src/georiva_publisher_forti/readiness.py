@@ -355,10 +355,18 @@ def _slots(collection, mapped: dict, blank: list, foreign: list) -> Finding:
     Both are :data:`BLOCKED`. Neither is fixed by any run closing, which is the
     whole of what separates this row from the one above it.
     """
-    filled = len(mapped) - len(blank)
-    answer = f"{filled} of {len(mapped)}"
+    required = len(params.REQUIRED_SLOT_KEYS)
+    answer = f"{required - len(blank)} of {required}"
     if blank or foreign:
         return Finding(key="slots", state=BLOCKED, answer=answer, detail=_slot_detail(collection, blank, foreign))
+    left_out = [key for key, variable in mapped.items() if variable is None]
+    if left_out:
+        return Finding(
+            key="slots",
+            state=READY,
+            answer=answer,
+            detail=f"{', '.join(left_out)} is optional and not set, so it is left out of what is published.",
+        )
     return Finding(key="slots", state=READY, answer=answer)
 
 
@@ -432,7 +440,8 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             detail="No forecast run has arrived yet.",
         )
 
-    hrefs = planner.cog_hrefs(collection, run.reference_time, mapped)
+    filled = {key: variable for key, variable in mapped.items() if variable is not None}
+    hrefs = planner.cog_hrefs(collection, run.reference_time, filled)
     shared = planner.shared_times(hrefs)
     when = stamp(run.reference_time)
 
@@ -444,7 +453,7 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             detail=f"No step of the {when} run has data for every variable yet. This resolves itself as data arrives.",
         )
 
-    if not planner.spans_a_period(publishable(shared, params.ALL_PARAMETERS)):
+    if not planner.spans_a_period(publishable(shared, params.parameters_for(filled))):
         return Finding(
             key="steps",
             state=WAITING,
@@ -475,7 +484,8 @@ def _slot_detail(collection, blank: list, foreign: list) -> str:
     said = []
     if blank:
         said.append(
-            f"{listed(blank)} is not set. Every Forti parameter needs a variable — set it on the Variables page."
+            f"{listed(blank)} is not set. Every required Forti parameter needs a variable — "
+            f"set it on the Variables page."
         )
     if foreign:
         said.append(f"{listed(foreign)} uses a variable from a different collection than {collection.slug}.")
