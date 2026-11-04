@@ -13,6 +13,14 @@ serving pair from `wmo-raf/forti` at `v0.8.1-wmo.1` (see `deploy/compose.yml`).
 that only existed on the machine that built them, so an image-only server can
 start the pair.
 
+### Installing the serving pair on an image-only server
+
+The README now says how: save `deploy/compose.yml` at your pinned tag as
+`docker-compose.forti.yml` next to core's `docker-compose.yml` and list it in
+`COMPOSE_FILE` in `.env`. The overlay's `FORTI_COMPOSE_VERSION` is now `0.1.0`,
+matching the plugin, so the verification panel does not report a correct install
+as out of date.
+
 ### Signed-in callers get a larger rate limit
 
 `GET /api/forecast/` and `GET /api/forecast/{model}/` now throttle anonymous

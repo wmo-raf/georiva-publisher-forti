@@ -34,6 +34,10 @@
 #                  -f dev-plugins/georiva-publisher-forti/deploy/compose.yml \
 #                  up -d
 #
+# On an image-only server (core's `deploy/`) there is no `dev-plugins/` — see the
+# README, "On an image-only server": save this file beside `docker-compose.yml`
+# as `docker-compose.forti.yml` and list it in `COMPOSE_FILE` in `.env`.
+#
 # Operators fetch it at the tag they pinned for this plugin in `plugins.toml`
 # (`deploy/plugins/parse_plugins_toml.py` is what reads that manifest, and its
 # `tag` field is what it appends to the git URL). That pairing is manual — the
@@ -100,7 +104,7 @@ services:
       # Set here and not overridable: it is the identity of *this file*, and an
       # operator who could edit it could only make the drift check lie. Bump it
       # with the plugin's version — `test_compose.py` fails if they disagree.
-      FORTI_COMPOSE_VERSION: "0.0.1"
+      FORTI_COMPOSE_VERSION: "0.1.0"
       # `_forti/` is `models.SINK_ROOT`, the one prefix for the instance (D15).
       # Also not overridable: a value that disagrees with what the publisher
       # writes produces an empty config directory and no error.
