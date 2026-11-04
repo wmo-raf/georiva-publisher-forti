@@ -454,14 +454,42 @@ window — which is what the model's own refusal message recommends.
 ## Deploying the serving pair
 
 `deploy/compose.yml` is an **overlay** on core's compose, not a stack of its own.
-Fetch it at the tag you pinned for this plugin in `plugins.toml` and apply it
-from core's repository root:
+In a development checkout, apply it from core's repository root:
 
 ```bash
 docker compose -f docker-compose.yml \
                -f dev-plugins/georiva-publisher-forti/deploy/compose.yml \
                up -d
 ```
+
+### On an image-only server
+
+The plugin is installed into the shared `georiva-plugins` volume, so its
+`deploy/compose.yml` is **not** on the server's disk. And `./deploy.sh` runs plain
+`docker compose` in `deploy/`, which reads only `docker-compose.yml` and
+`docker-compose.override.yml`. Two steps put the overlay in play:
+
+```bash
+cd deploy        # core's deploy/ on the server, beside docker-compose.yml
+
+# 1. The overlay, at the tag you pinned for this plugin in plugins.toml.
+curl -fsSL -o docker-compose.forti.yml \
+  https://raw.githubusercontent.com/wmo-raf/georiva-publisher-forti/0.1.0/deploy/compose.yml
+
+# 2. Tell compose to read it, in .env. Setting COMPOSE_FILE switches off the
+#    automatic override, so list that too (if you have one).
+COMPOSE_FILE=docker-compose.yml:docker-compose.override.yml:docker-compose.forti.yml
+```
+
+Then `./deploy.sh <core version>` pulls and starts the pair with everything else.
+The two images come from `ghcr.io/wmo-raf/forti/` and need no build; the host must
+be able to pull them (public packages, or `docker login ghcr.io`).
+
+**Upgrading the plugin means re-running step 1 at the new tag.** Nothing does it
+for you, because `plugins.toml` installs a Python package and never touches this
+file. The two drift silently, and the verification panel is what notices: it reads
+`FORTI_COMPOSE_VERSION` out of the running sidecar and compares it with the
+installed plugin.
 
 It is static. One `rawdataforecaster` + `jsonfrontend` pair serves the whole
 instance (D14): the fork takes a per-request `areas` filter and reports the
