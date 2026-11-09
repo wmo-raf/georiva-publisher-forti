@@ -15,9 +15,16 @@ game.
 
 import numpy as np
 
-#: Below this, an accumulation that goes backwards is float noise rather than a
+#: Below this, an accumulation that goes backwards is packing noise rather than a
 #: variable that is not an accumulation at all. In mm.
-ACCUMULATION_TOLERANCE = 0.01
+#:
+#: ECMWF open data packs ``tp`` into 12 bits, with a quantum set per message by
+#: the wettest point on the globe: 0.122 mm while that point is under ~500 mm,
+#: 0.244 mm once it passes. Each step is rounded on its own, so a point can dip
+#: by a whole quantum between steps — the 2026-11-09 00Z run does it at 113,898
+#: points between +63 h and +66 h. 0.5 mm clears two coarse quanta; a per-step
+#: or bucketed field still falls by whole millimetres somewhere in a run.
+ACCUMULATION_TOLERANCE = 0.5
 
 
 def relative_humidity(temperature_c: np.ndarray, dew_point_c: np.ndarray) -> np.ndarray:
@@ -46,9 +53,14 @@ def accumulation_window(accumulated: np.ndarray, windows) -> np.ndarray:
     Raises if the input is not actually an accumulation. A per-step precipitation
     field differenced this way produces plausible small numbers with no sign that
     anything is wrong, and a publication is read by a service that cannot check.
+
+    The dips the check tolerates are then taken out with a running maximum, so a
+    window spanning one comes out as what fell rather than as negative rain. The
+    check runs first, on the raw series: smoothed, a per-step field would pass.
     """
     _assert_accumulating(accumulated)
-    return np.stack([accumulated[window.end] - accumulated[window.start] for window in windows])
+    monotonic = np.maximum.accumulate(accumulated, axis=0)
+    return np.stack([monotonic[window.end] - monotonic[window.start] for window in windows])
 
 
 def window_max(values: np.ndarray, windows) -> np.ndarray:

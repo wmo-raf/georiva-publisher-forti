@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1
+
+### ECMWF runs publish again
+
+Every ECMWF IFS publish failed with "Precipitation is not accumulating: it falls
+by 0.122 mm between consecutive steps". The data was fine. ECMWF open data packs
+`tp` into 12 bits, rounding each step to a quantum of 0.122 mm, or 0.244 mm once
+the wettest point on the globe passes ~500 mm. Rounded step by step, a point can
+dip by one quantum between steps, and the old 0.01 mm tolerance treated that
+dip as a field that is not an accumulation.
+
+The tolerance is now 0.5 mm. The check still runs on the raw series, so a
+per-step or bucketed field is still refused. Precipitation windows are then
+taken over a running maximum, so a window spanning a dip reads as what fell
+and never as negative rain.
+
+No configuration change. The overlay is unchanged from 0.2.0. The sweep
+retries the failed run on its own once the plugin is upgraded.
+
 ## 0.2.0
 
 ### Settings can be set from the environment
