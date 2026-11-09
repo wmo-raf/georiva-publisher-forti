@@ -35,7 +35,7 @@
 #                  up -d
 #
 # On an image-only server (core's `deploy/`) there is no `dev-plugins/` — see the
-# README, "On an image-only server": save this file beside `docker-compose.yml`
+# README, "Installing": save this file beside `docker-compose.yml`
 # as `docker-compose.forti.yml` and list it in `COMPOSE_FILE` in `.env`.
 #
 # Operators fetch it at the tag they pinned for this plugin in `plugins.toml`

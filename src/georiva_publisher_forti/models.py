@@ -274,7 +274,7 @@ class FortiPublication(BuildDisciplinedModel):
         editable=False,
         verbose_name="Grid",
         # Operator-facing: the *why* — a fingerprint of the point list, pinned
-        # at the first build so a moved grid is refused — is in the README.
+        # at the first build so a moved grid is refused — is in docs/publications.md.
         help_text="Fingerprint of the grid of points, fixed at the first publish.",
     )
     point_count = models.PositiveIntegerField(default=0, editable=False, verbose_name="Grid points")
@@ -291,7 +291,7 @@ class FortiPublication(BuildDisciplinedModel):
         # ``run.version * 100 + generation``: the run's half is
         # ``ref_epoch_seconds * 100 + revision``, so the whole stamp orders by
         # model time, then by republish of that run, then by configuration
-        # generation. The README has the long form.
+        # generation. docs/design.md has the long form.
         help_text="Version number of what was last published. Goes up with every publish.",
     )
     published_reference_time = models.DateTimeField(
@@ -316,7 +316,8 @@ class FortiPublication(BuildDisciplinedModel):
     # republishing one run under a changed configuration needs a term the run
     # does not supply. It resets when a new run is published, because a new run
     # at generation 0 already outranks any generation of the one before it. The
-    # README's "Republishing one run after a configuration change" has the rest.
+    # "Republishing one run after a configuration change" section in docs/publications.md
+    # has the rest.
     generation = models.PositiveSmallIntegerField(
         default=0,
         verbose_name="Republish counter",
