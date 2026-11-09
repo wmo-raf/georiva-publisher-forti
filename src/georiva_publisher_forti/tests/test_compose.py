@@ -32,7 +32,7 @@ from pathlib import Path
 import yaml
 from django.test import SimpleTestCase
 
-from georiva_publisher_forti import config, models
+from georiva_publisher_forti import config, forti_settings, models
 
 COMPOSE_PATH = Path(__file__).resolve().parents[3] / "deploy" / "compose.yml"
 
@@ -40,6 +40,12 @@ SYNC_SCRIPT_CONFIG = "forti-sync-script"
 SIDECAR = "forti-config-sync"
 FORECASTER = "forti-rawdataforecaster"
 FRONTEND = "forti-jsonfrontend"
+FORTI_SERVICES = (SIDECAR, FORECASTER, FRONTEND)
+
+#: Core's services that read a ``GEORIVA_FORTI_*`` setting: the web app (the
+#: route, the throttles, the panel), the default worker (``refresh_forti_config``)
+#: and the processing worker (the refresh at the end of a publish).
+CORE_SERVICES = ("georiva", "georiva-celery-default-worker", "georiva-celery-processing-worker")
 
 
 def load():
@@ -196,8 +202,37 @@ class ArtifactTests(SimpleTestCase):
     def test_the_images_are_pinned_and_not_the_spike(self):
         """M5.1 settled on ``v0.8.1-wmo.1`` with the fork's git sha as a label.
         ``:spike`` is a name that has to be unlearned."""
-        images = [service["image"] for service in self.services.values()]
+        images = [self.services[name]["image"] for name in FORTI_SERVICES]
 
         self.assertNotIn(":spike", " ".join(images))
         for image in images:
             self.assertRegex(image, r":[^}]+}$", f"{image} floats")
+
+
+class SettingsPassthroughTests(SimpleTestCase):
+    """Core's backend services take an explicit variable list and no
+    ``env_file``, so a ``GEORIVA_FORTI_*`` line in ``.env`` reaches Django only
+    if this overlay names it. A setting registered and not passed is one an
+    operator sets, sees in ``.env``, and never gets."""
+
+    def setUp(self):
+        self.services = load()["services"]
+
+    def test_each_core_service_gets_exactly_the_registered_settings(self):
+        for name in CORE_SERVICES:
+            with self.subTest(service=name):
+                self.assertEqual(set(self.services[name]["environment"]), set(forti_settings.SETTINGS))
+
+    def test_an_unset_variable_arrives_empty_and_falls_through_to_the_default(self):
+        """``${X:-}`` and not ``${X}``: compose warns on every unset bare
+        reference, and the empty string is what the reader treats as unset."""
+        for name in CORE_SERVICES:
+            for variable, value in self.services[name]["environment"].items():
+                with self.subTest(service=name, variable=variable):
+                    self.assertEqual(value, f"${{{variable}:-}}")
+
+    def test_the_overlay_adds_nothing_else_to_core_services(self):
+        """It extends core's services; it must not redefine them."""
+        for name in CORE_SERVICES:
+            with self.subTest(service=name):
+                self.assertEqual(set(self.services[name]), {"environment"})

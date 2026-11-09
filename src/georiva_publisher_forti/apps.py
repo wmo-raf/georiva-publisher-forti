@@ -11,3 +11,8 @@ class GeorivaPublisherFortiConfig(AppConfig):
         # 0020 protects: ingestion emits ``run_ingestion_closed`` knowing nothing
         # about who listens, and this plugin is the first subscriber.
         from . import signals  # noqa: F401
+        from .forti_settings import check
+
+        # A malformed GEORIVA_FORTI_* value stops the process here, naming the
+        # variable, instead of at the first request that reads it.
+        check()

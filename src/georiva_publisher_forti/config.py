@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from django.conf import settings
 
 from . import jsonformat, rdfconfig
+from .forti_settings import read
 
 logger = logging.getLogger(__name__)
 
@@ -164,8 +165,7 @@ def storage_settings() -> dict:
         "bucket": bucket,
         "endpoint": endpoint,
         "region": getattr(settings, "AWS_S3_REGION_NAME", "us-east-1") or "us-east-1",
-        "maximum_gridpoint_distance": getattr(
-            settings,
+        "maximum_gridpoint_distance": read(
             "GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE",
             rdfconfig.DEFAULT_MAXIMUM_GRIDPOINT_DISTANCE,
         ),
