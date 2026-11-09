@@ -66,6 +66,30 @@ class PrecipitationWindowTests(SimpleTestCase):
 
         accumulation_window(accumulated, find_windows(times, 6))
 
+    def test_a_grib_packing_dip_publishes_no_negative_rain(self):
+        """ECMWF's 12-bit packing rounds each step on its own, so a point can
+        fall by a whole quantum (0.122 mm) between steps. That publishes, and a
+        window ending in the dip reads as the rain that fell, never below zero."""
+        times = hourly(13)
+        accumulated = np.full((13, 1), 10.0)
+        accumulated[:7] = 10.122  # rounded up early, down from step 7 on
+
+        result = accumulation_window(accumulated, find_windows(times, 6))
+
+        self.assertTrue((result >= 0).all())
+
+    def test_a_dry_window_across_a_dip_is_exactly_zero(self):
+        times = hourly(13)
+        accumulated = np.full((13, 1), 4.0)
+        accumulated[3] = 4.122  # rounded up once, then back
+        windows = find_windows(times, 6)
+        from_the_dip = next(i for i, window in enumerate(windows) if window.start == 3)
+
+        result = accumulation_window(accumulated, windows)
+
+        # Raw, this window is 4.0 - 4.122: negative rain.
+        self.assertEqual(result[from_the_dip].item(), 0.0)
+
 
 class ExtremeTests(SimpleTestCase):
     def test_the_maximum_includes_both_endpoints(self):

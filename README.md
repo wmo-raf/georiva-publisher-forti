@@ -44,7 +44,7 @@ Use the same plugin tag in steps 1 and 2.
 [[plugins]]
 name = "GeoRiva Forti Publisher"
 git  = "https://github.com/wmo-raf/georiva-publisher-forti.git"
-tag  = "0.2.0"
+tag  = "0.2.1"
 ```
 
 **2. Add the serving pair.** The plugin is installed into the `georiva-plugins`
@@ -52,7 +52,7 @@ volume, so its compose file is not on the server's disk. Fetch it at the same ta
 
 ```bash
 curl -fsSL -o docker-compose.forti.yml \
-  https://raw.githubusercontent.com/wmo-raf/georiva-publisher-forti/0.2.0/deploy/compose.yml
+  https://raw.githubusercontent.com/wmo-raf/georiva-publisher-forti/0.2.1/deploy/compose.yml
 ```
 
 **3. Tell compose to read it.** In `.env`:
