@@ -76,9 +76,20 @@ This installs the plugin and pulls and starts `forti-config-sync`,
 None of them publishes a port. The only way in is the plugin's `/api/forecast/`
 route.
 
-**Upgrading.** Bump the tag in `plugins.toml` **and** re-run step 2 at the new
-tag. Nothing re-fetches the compose file for you. If the two drift apart, the
-serving status page (below) reports it.
+**Upgrading.** Bump the tag in `plugins.toml`, then from core's `deploy/`:
+
+```bash
+./deploy.sh plugins
+```
+
+It reinstalls, reports `~ georiva_publisher_forti 0.2.0 → 0.2.1`, and restarts
+the services that load the plugin. A bare `docker compose up -d` is not enough:
+it installs the new version but leaves the running workers on the old one.
+`./deploy.sh plugins` needs a core version from after ADR 0040.
+
+When the CHANGELOG says the overlay changed, also re-run step 2 at the new tag:
+nothing re-fetches the compose file for you. If the two drift apart, the serving
+status page (below) reports it.
 
 ### In a development checkout
 
