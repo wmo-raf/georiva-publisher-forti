@@ -10,6 +10,18 @@ answering area back, so the tenant boundary is what the request names and is
 checked on every response, rather than which process was asked. There is nothing
 left that varies with the tenant set, so there is nothing to generate.
 
+## Settings passed into core's services
+
+Core ships no `GEORIVA_FORTI_*` setting (D19), and its backend services take an
+explicit variable list with no `env_file`. A line in `.env` therefore reaches
+Django only if something names it. The overlay does that: an
+`x-forti-settings` anchor lists every name in `forti_settings.SETTINGS` as
+`${X:-}`, merged into `georiva`, `georiva-celery-default-worker` and
+`georiva-celery-processing-worker`. `test_compose.py` keeps the two lists equal.
+
+This is the one place the overlay names core's services. If core renames one,
+compose finds a service here with no image and `up` fails loudly.
+
 ## The images
 
 `ghcr.io/wmo-raf/forti/rawdataforecaster:v0.8.1-wmo.1` and

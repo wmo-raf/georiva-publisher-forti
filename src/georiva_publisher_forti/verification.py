@@ -74,13 +74,13 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import PurePosixPath
 
-from django.conf import settings
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy
 
 from . import config, rdfconfig
 from .config import ABSENT, PRESENT, UNREACHABLE
+from .forti_settings import read
 
 logger = logging.getLogger(__name__)
 
@@ -1317,7 +1317,7 @@ def _timed_out(deadline: float) -> str:
 
 
 def deadline_seconds() -> float:
-    return float(getattr(settings, "GEORIVA_FORTI_VERIFICATION_DEADLINE", DEFAULT_DEADLINE))
+    return float(read("GEORIVA_FORTI_VERIFICATION_DEADLINE", DEFAULT_DEADLINE))
 
 
 def resident_areas(*, sink=None, deadline: float | None = None) -> ResidentAreas:

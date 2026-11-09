@@ -44,7 +44,7 @@ Use the same plugin tag in steps 1 and 2.
 [[plugins]]
 name = "GeoRiva Forti Publisher"
 git  = "https://github.com/wmo-raf/georiva-publisher-forti.git"
-tag  = "0.1.0"
+tag  = "0.2.0"
 ```
 
 **2. Add the serving pair.** The plugin is installed into the `georiva-plugins`
@@ -52,7 +52,7 @@ volume, so its compose file is not on the server's disk. Fetch it at the same ta
 
 ```bash
 curl -fsSL -o docker-compose.forti.yml \
-  https://raw.githubusercontent.com/wmo-raf/georiva-publisher-forti/0.1.0/deploy/compose.yml
+  https://raw.githubusercontent.com/wmo-raf/georiva-publisher-forti/0.2.0/deploy/compose.yml
 ```
 
 **3. Tell compose to read it.** In `.env`:
@@ -127,20 +127,32 @@ Details: [docs/verification.md](docs/verification.md).
 
 ## Settings
 
-All optional. These are Django settings, read with `getattr(settings, …)`. Core
-ships none of them, and none is read from the environment.
+All optional. Set them in core's `.env`. The overlay passes them into the
+`georiva` web app and the default and processing workers. An empty value means
+"use the default", and a malformed one stops the app at startup, naming the
+variable. A Django setting of the same name, if one exists, takes precedence.
 
-| setting | default | |
+| variable | default | |
 |---|---|---|
 | `GEORIVA_FORTI_JSONFRONTEND_HOST` | `forti-jsonfrontend` | the service name in `deploy/compose.yml` |
 | `GEORIVA_FORTI_JSONFRONTEND_PORT` | `8080` | |
 | `GEORIVA_FORTI_TIMEOUT` | `5` | seconds |
-| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `"60/min"` | anonymous callers, per IP per organisation; `None` disables |
-| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED` | `"600/min"` | signed-in callers (session or `grv_…` key). Give an NMHS website a key rather than raising the anonymous rate |
+| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE` | `60/min` | anonymous callers, per IP per organisation; `off` disables |
+| `GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED` | `600/min` | signed-in callers (session or `grv_…` key); `off` disables. Give an NMHS website a key rather than raising the anonymous rate |
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be cached |
 | `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the status page and listing give the bucket |
+| `GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE` | `50000` | metres; a point farther than this from the nearest gridpoint is outside coverage. Restart `forti-rawdataforecaster` after changing it |
 
-The compose overlay reads these from core's `.env`, with defaults that work as they are:
+For example, in `.env`:
+
+```bash
+GEORIVA_FORTI_FORECAST_THROTTLE_RATE=120/min
+GEORIVA_FORTI_FORECAST_MAX_AGE=900
+```
+
+Then `./deploy.sh <core version>` again, so the containers pick the values up.
+
+The overlay also reads these for its own services, with defaults that work as they are:
 
 | variable | default |
 |---|---|

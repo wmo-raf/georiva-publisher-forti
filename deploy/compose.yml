@@ -73,8 +73,46 @@
 # `meta.area` back.
 #
 # Credentials are referenced, never embedded. This file is committed.
+#
+# ---------------------------------------------------------------------------
+# THE PLUGIN'S SETTINGS, PASSED INTO CORE'S SERVICES
+#
+# Core ships no `GEORIVA_FORTI_*` setting (D19) and its backend services take an
+# explicit variable list with no `env_file`, so a line in `.env` reaches Django
+# only if something names it. This file does, for the three core services that
+# read one: the web app (the route, the throttles, the panel), the default
+# worker (`refresh_forti_config`) and the processing worker (the refresh at the
+# end of a publish). Each is `${X:-}`: unset arrives as "", which the plugin
+# reads as "use the default" (`forti_settings.py`).
+#
+# This names core's services. If core renames one, compose finds a service
+# here with no image and `up` fails, which is the loud failure wanted. The list
+# of names is `forti_settings.SETTINGS`, and `test_compose.py` holds the two
+# equal.
+
+x-forti-settings: &forti-settings
+  GEORIVA_FORTI_JSONFRONTEND_HOST: ${GEORIVA_FORTI_JSONFRONTEND_HOST:-}
+  GEORIVA_FORTI_JSONFRONTEND_PORT: ${GEORIVA_FORTI_JSONFRONTEND_PORT:-}
+  GEORIVA_FORTI_TIMEOUT: ${GEORIVA_FORTI_TIMEOUT:-}
+  GEORIVA_FORTI_FORECAST_THROTTLE_RATE: ${GEORIVA_FORTI_FORECAST_THROTTLE_RATE:-}
+  GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED: ${GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED:-}
+  GEORIVA_FORTI_FORECAST_MAX_AGE: ${GEORIVA_FORTI_FORECAST_MAX_AGE:-}
+  GEORIVA_FORTI_VERIFICATION_DEADLINE: ${GEORIVA_FORTI_VERIFICATION_DEADLINE:-}
+  GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE: ${GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE:-}
 
 services:
+  georiva:
+    environment:
+      <<: *forti-settings
+
+  georiva-celery-default-worker:
+    environment:
+      <<: *forti-settings
+
+  georiva-celery-processing-worker:
+    environment:
+      <<: *forti-settings
+
   # -------------------------------------------------------------------------
   # The config sidecar. The GeoRiva analogue of forti-control: the filesystem
   # is the whole interface between the thing that decides the config and the
@@ -104,7 +142,7 @@ services:
       # Set here and not overridable: it is the identity of *this file*, and an
       # operator who could edit it could only make the drift check lie. Bump it
       # with the plugin's version — `test_compose.py` fails if they disagree.
-      FORTI_COMPOSE_VERSION: "0.1.0"
+      FORTI_COMPOSE_VERSION: "0.2.0"
       # `_forti/` is `models.SINK_ROOT`, the one prefix for the instance (D15).
       # Also not overridable: a value that disagrees with what the publisher
       # writes produces an empty config directory and no error.

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0
+
+### Settings can be set from the environment
+
+Every `GEORIVA_FORTI_*` setting can now be set in core's `.env`. Before, they
+could only be set as Django settings, and core ships none of them, so on an
+image-only server they were out of reach. The order is a Django setting if one
+exists, then the environment, then the plugin's default. An empty value means
+"use the default". In the environment, `off` turns a throttle off, as `None`
+does as a Django setting. A malformed value stops the app at startup, naming
+the variable.
+
+`deploy/compose.yml` passes the variables into `georiva`,
+`georiva-celery-default-worker` and `georiva-celery-processing-worker`, so
+**re-fetch the overlay at `0.2.0`** when you upgrade. On the 0.1.0 overlay the
+plugin runs on its defaults and the serving status page reports the compose
+file as out of date.
+
+`GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE` (metres, default 50000) is now
+documented. Changing it needs a restart of `forti-rawdataforecaster`.
+
+### The README is about installing
+
+The README covers installing and running the plugin. The design notes, the
+publication workflow, the serving details and the verification panel moved,
+unchanged, to `docs/`.
+
 ## 0.1.0
 
 First installable release. Needs GeoRiva core 0.5.0 or later, and the Forti

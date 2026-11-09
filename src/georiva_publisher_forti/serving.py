@@ -16,9 +16,9 @@ Go services off the network entirely — neither publishes a port.
 plugin holds everything shaped like its own domain. The route reaches ``/api/``
 through core's plugin URL hook (ADR 0028 in core) and nothing about a point
 forecast is written down in core — not the upstream's name, not the timeout, not
-the throttle rate, not the cache lifetime. Every setting below is read with a
-default that lives here, which is the pattern ``config.storage_settings()``
-already follows.
+the throttle rate, not the cache lifetime. Every setting below is read through
+``forti_settings.read`` with a default that lives here: a Django setting, then
+the environment, then that default.
 
 **The model is the resource, and it is also the tenant boundary.** An earlier
 draft of this view derived the upstream's name from the organisation slug and
@@ -40,7 +40,6 @@ socket rather than letting an empty area reach it.
 import logging
 
 import requests
-from django.conf import settings
 from django.http import Http404
 from rest_framework import status
 from rest_framework.response import Response
@@ -50,6 +49,7 @@ from rest_framework.views import APIView
 from georiva.organisations.access import require_active_org, scoped_queryset
 
 from . import parameters as params
+from .forti_settings import read
 from .models import FortiPublication
 
 logger = logging.getLogger(__name__)
@@ -105,8 +105,8 @@ def upstream_url() -> str:
     still has to be able to say where the pair is; not overridable *in core*,
     which is D19.
     """
-    host = getattr(settings, "GEORIVA_FORTI_JSONFRONTEND_HOST", DEFAULT_JSONFRONTEND_HOST)
-    port = getattr(settings, "GEORIVA_FORTI_JSONFRONTEND_PORT", DEFAULT_JSONFRONTEND_PORT)
+    host = read("GEORIVA_FORTI_JSONFRONTEND_HOST", DEFAULT_JSONFRONTEND_HOST)
+    port = read("GEORIVA_FORTI_JSONFRONTEND_PORT", DEFAULT_JSONFRONTEND_PORT)
     return f"http://{host}:{port}/"
 
 
@@ -124,12 +124,12 @@ class ForecastThrottle(SimpleRateThrottle):
     the first request that reached the counter would have been a 500. Adding the
     key to core's settings is what that draft did and what D19 forbids. Reading
     it here instead keeps the whole route — view, URL, throttle, upstream — inside
-    the plugin, and it is the same ``getattr(settings, "GEORIVA_FORTI_…",
-    <plugin default>)`` shape as everything else in this package.
+    the plugin, and it goes through ``forti_settings.read`` like every other
+    ``GEORIVA_FORTI_*`` value, so an operator can set it from the environment.
 
-    ``None`` turns the throttle off: ``SimpleRateThrottle.allow_request`` returns
-    ``True`` on a null rate, which is the honest way for an operator behind their
-    own rate limiter to say so.
+    ``None`` turns the throttle off — ``off`` in the environment:
+    ``SimpleRateThrottle.allow_request`` returns ``True`` on a null rate, which is
+    the honest way for an operator behind their own rate limiter to say so.
 
     **The scope is a class attribute, not a view attribute.** That is also why
     the base class changed. ``ScopedRateThrottle.allow_request`` overwrites
@@ -150,11 +150,10 @@ class ForecastThrottle(SimpleRateThrottle):
     scope = "georiva_forti_forecast"
 
     def get_rate(self):
-        return getattr(settings, "GEORIVA_FORTI_FORECAST_THROTTLE_RATE", DEFAULT_THROTTLE_RATE)
+        return read("GEORIVA_FORTI_FORECAST_THROTTLE_RATE", DEFAULT_THROTTLE_RATE)
 
     def get_authenticated_rate(self):
-        return getattr(
-            settings,
+        return read(
             "GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED",
             DEFAULT_AUTHENTICATED_THROTTLE_RATE,
         )
@@ -239,7 +238,7 @@ def ask_upstream(area: str, latitude: float, longitude: float):
     return requests.get(
         upstream_url(),
         params=upstream_params(area, latitude, longitude),
-        timeout=getattr(settings, "GEORIVA_FORTI_TIMEOUT", DEFAULT_TIMEOUT),
+        timeout=read("GEORIVA_FORTI_TIMEOUT", DEFAULT_TIMEOUT),
         # Not forwarded: jsonfrontend offers gzip, and asking for it here would
         # only mean decompressing a body we immediately re-serve.
         headers={"Accept-Encoding": "identity"},
@@ -364,7 +363,7 @@ def _document(document, publication):
     """
     response = Response(document, status=status.HTTP_200_OK)
     if publication.effective_visibility == FortiPublication.Visibility.PUBLIC:
-        max_age = getattr(settings, "GEORIVA_FORTI_FORECAST_MAX_AGE", DEFAULT_MAX_AGE)
+        max_age = read("GEORIVA_FORTI_FORECAST_MAX_AGE", DEFAULT_MAX_AGE)
         response["Cache-Control"] = f"public, max-age={max_age}"
     else:
         response["Cache-Control"] = "private, no-store"
