@@ -144,7 +144,7 @@ services:
       # Set here and not overridable: it is the identity of *this file*, and an
       # operator who could edit it could only make the drift check lie. Bump it
       # with the plugin's version — `test_compose.py` fails if they disagree.
-      FORTI_COMPOSE_VERSION: "0.2.0"
+      FORTI_COMPOSE_VERSION: "0.3.0"
       # `_forti/` is `models.SINK_ROOT`, the one prefix for the instance (D15).
       # Also not overridable: a value that disagrees with what the publisher
       # writes produces an empty config directory and no error.

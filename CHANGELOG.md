@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0
+
+### A model's forecast, told for its towns
+
+`GET /api/forecast/<model>/places/` joins core's town gazetteer onto the point
+forecasts: the instance-wide towns plus the owning organisation's own, inside
+the publication's bbox. With no `time` it returns the latest run as arrays,
+every town by every time; with `?time=` it returns one GeoJSON
+FeatureCollection. Each town carries the weather symbol and precipitation for
+the finest window the model publishes (1 h for an hourly model, 6 h for IFS;
+`?window=` picks another it has), with the temperature and wind at the window's
+start. Both forms carry the publication's `bbox`.
+
+The towns × times matrix is built on the first request after a publish, once
+the reader holds the new run, and cached until the next; until then the route
+answers 503 with `Retry-After`. Public answers are shared for 60 s, with an
+ETag.
+
+**Needs a core with the town gazetteer** (core `main` after 0.5.0) and towns
+imported: `georiva import_towns KE …`. On an older core everything else in the
+plugin works and `places/` alone fails.
+
+Two new settings, both optional: `GEORIVA_FORTI_PLACES_CONCURRENCY` (8) and
+`GEORIVA_FORTI_PLACES_WAIT` (5 s). Re-apply the compose overlay from this tag
+to pass them through.
+
+### The compose overlay reports its version again
+
+`FORTI_COMPOSE_VERSION` said 0.2.0 through 0.2.1. It now matches the plugin.
+
 ## 0.2.1
 
 ### ECMWF runs publish again

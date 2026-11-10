@@ -1,6 +1,6 @@
 {
   "name": "GeoRiva Forti Publisher",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Publishes a GeoRiva forecast collection as met.no Forti internal-format point data, served as locationforecast 2.0",
   "author": "WMO RAF",
   "author_url": "https://github.com/wmo-raf",
