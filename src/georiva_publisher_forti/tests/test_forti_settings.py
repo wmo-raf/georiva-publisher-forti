@@ -126,5 +126,7 @@ class StartupCheckTests(SimpleTestCase):
                 "GEORIVA_FORTI_FORECAST_MAX_AGE",
                 "GEORIVA_FORTI_VERIFICATION_DEADLINE",
                 "GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE",
+                "GEORIVA_FORTI_PLACES_CONCURRENCY",
+                "GEORIVA_FORTI_PLACES_WAIT",
             },
         )

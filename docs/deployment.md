@@ -61,6 +61,8 @@ so core ships no `GEORIVA_FORTI_*` setting at all.
 | `GEORIVA_FORTI_FORECAST_THROTTLE_RATE_AUTHENTICATED` | `"600/min"` | signed-in callers (session or `grv_…` key), per user per organisation; `None` disables. Give an NMHS website a key rather than raising the anonymous rate |
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be shared |
 | `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the verification panel and the publications listing give the bucket, all reads together |
+| `GEORIVA_FORTI_PLACES_CONCURRENCY` | `8` | parallel reader calls while a model's town forecasts are first built |
+| `GEORIVA_FORTI_PLACES_WAIT` | `5` | seconds a request waits on a town build already running before answering 503 |
 
 **The model is the resource, and it is also the tenant boundary.** The path
 selects one `FortiPublication`; the view sends exactly one `area={org}.{slug}`

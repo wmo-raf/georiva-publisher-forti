@@ -6,7 +6,17 @@ data, so a point forecast can be served as **locationforecast 2.0**.
 ```
 GET /api/forecast/                                   # the models you may see
 GET /api/forecast/ecmwf-ifs/?lat=-1.2864&lon=36.8172 # one point out of one model
+GET /api/forecast/ecmwf-ifs/places/                  # the latest run, told for its towns
+GET /api/forecast/ecmwf-ifs/places/?time=2026-11-10T18:00:00Z  # one time, as GeoJSON
 ```
+
+`places/` joins core's town gazetteer (`georiva import_towns KE …`) onto the
+point answers: the instance-wide towns plus the owning organisation's own,
+inside the model's bbox. Each town carries the weather symbol and precipitation
+for the finest window the model publishes (`window=PT1H|PT6H|PT12H` picks
+another), with the temperature and wind at the window's start. The matrix is
+built on the first request after a publish, once the reader holds the new run,
+and cached until the next; until then the route answers 503 with `Retry-After`. Both forms carry the publication's `bbox` (west, south, east, north).
 
 A point query against GeoRiva's COGs costs ~950 range reads (~93 MB). The same
 point out of Forti costs one read of ~2 KB. The plugin pays for that once per run,
@@ -28,6 +38,8 @@ It has two parts, and a working install needs both:
 ## Requirements
 
 - **GeoRiva core 0.5.0 or later.** On an older core the plugin does not import.
+  The `places/` route needs a core with the town gazetteer (`Town`, after
+  0.5.0); on 0.5.0 everything else works and `places/` fails alone.
 - The host must be able to pull `ghcr.io/wmo-raf/forti/rawdataforecaster` and
   `ghcr.io/wmo-raf/forti/jsonfrontend` (public packages, or `docker login ghcr.io`).
 
@@ -153,6 +165,8 @@ variable. A Django setting of the same name, if one exists, takes precedence.
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be cached |
 | `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the status page and listing give the bucket |
 | `GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE` | `50000` | metres; a point farther than this from the nearest gridpoint is outside coverage. Restart `forti-rawdataforecaster` after changing it |
+| `GEORIVA_FORTI_PLACES_CONCURRENCY` | `8` | parallel reader calls while a model's town forecasts are first built |
+| `GEORIVA_FORTI_PLACES_WAIT` | `5` | seconds a request waits on a town build already running before answering 503 |
 
 For example, in `.env`:
 

@@ -166,3 +166,27 @@ unsmoothed ones.
 Precipitation windows use `acc[end] − acc[start]`, **not** `np.diff(acc, n=6)` —
 the sixth-order finite difference, which `forti-prep`'s `convert.py:128` has used
 since it was written. The length coincidentally matches, so its own assert passes.
+
+## Town forecasts (`places/`)
+
+A map of towns wants every town at once; the point route answers one. So
+`places.py` joins the two: core's town gazetteer, clipped to the publication's
+bbox (instance-wide towns plus the *owner's* own, whoever asks), each asked of
+`jsonfrontend` exactly as the point route asks it, folded into one towns × times
+matrix.
+
+- **Lazy, once per version.** One reader call is a town's whole series, so the
+  cost is one call per town per run; the first request after a publish builds,
+  under a single-flight lock, and the matrix is cached under
+  `(publication, version, towns digest)`. Eager building on a queue was
+  rejected: whatever queue it waited on would be the layer's lag.
+- **Never the wrong run.** `published_version` moves a moment before the reader
+  loads it, and the reader's answers name no version — only `updated_at`, its
+  load stamp. So a build waits until the status document reports the version
+  resident, is thrown away if the stamps disagree, and is checked against the
+  status document again afterwards.
+- **The finest window by default** — `next_1_hours` for an hourly model,
+  `next_6_hours` for IFS — so a symbol describes the hour the map under it shows.
+- **Shared for a minute, not half an hour.** The URL names no version, so a long
+  public share would keep a new run behind the last; the ETag makes the
+  revalidation cheap.

@@ -53,6 +53,13 @@ def _non_negative_int(raw: str) -> int:
     return value
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise ValueError("must be at least 1")
+    return value
+
+
 def _port(raw: str) -> int:
     value = int(raw)
     if not 0 < value < 65536:
@@ -78,6 +85,8 @@ SETTINGS = {
     "GEORIVA_FORTI_FORECAST_MAX_AGE": _non_negative_int,
     "GEORIVA_FORTI_VERIFICATION_DEADLINE": _positive_float,
     "GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE": _non_negative_int,
+    "GEORIVA_FORTI_PLACES_CONCURRENCY": _positive_int,
+    "GEORIVA_FORTI_PLACES_WAIT": _non_negative_int,
 }
 
 _MISSING = object()
