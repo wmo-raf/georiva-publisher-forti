@@ -20,6 +20,7 @@ to write down our packaging.
 
 from django.urls import path
 
+from .places import PlacesView
 from .serving import ForecastModelListView, ForecastView
 
 app_name = "georiva_publisher_forti"
@@ -30,4 +31,5 @@ urlpatterns = [
     # order a consumer meets them.
     path("forecast/", ForecastModelListView.as_view(), name="forecast_models"),
     path("forecast/<slug:model>/", ForecastView.as_view(), name="forecast"),
+    path("forecast/<slug:model>/places/", PlacesView.as_view(), name="forecast_places"),
 ]

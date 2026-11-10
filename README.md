@@ -153,6 +153,8 @@ variable. A Django setting of the same name, if one exists, takes precedence.
 | `GEORIVA_FORTI_FORECAST_MAX_AGE` | `1800` | how long a *public* model's answer may be cached |
 | `GEORIVA_FORTI_VERIFICATION_DEADLINE` | `5` | seconds the status page and listing give the bucket |
 | `GEORIVA_FORTI_MAXIMUM_GRIDPOINT_DISTANCE` | `50000` | metres; a point farther than this from the nearest gridpoint is outside coverage. Restart `forti-rawdataforecaster` after changing it |
+| `GEORIVA_FORTI_PLACES_CONCURRENCY` | `8` | parallel reader calls while a model's town forecasts are first built |
+| `GEORIVA_FORTI_PLACES_WAIT` | `5` | seconds a request waits on a town build already running before answering 503 |
 
 For example, in `.env`:
 
