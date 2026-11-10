@@ -16,7 +16,7 @@ inside the model's bbox. Each town carries the weather symbol and precipitation
 for the finest window the model publishes (`window=PT1H|PT6H|PT12H` picks
 another), with the temperature and wind at the window's start. The matrix is
 built on the first request after a publish, once the reader holds the new run,
-and cached until the next; until then the route answers 503 with `Retry-After`.
+and cached until the next; until then the route answers 503 with `Retry-After`. Both forms carry the publication's `bbox` (west, south, east, north).
 
 A point query against GeoRiva's COGs costs ~950 range reads (~93 MB). The same
 point out of Forti costs one read of ~2 KB. The plugin pays for that once per run,

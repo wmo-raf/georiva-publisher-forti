@@ -189,6 +189,13 @@ class WholeRunTests(PlacesTestCase):
         self.assertEqual(values["precipitation_amount"], [[1.2, 0.0], [0.0, 0.0]])
         self.assertEqual(body["units"]["air_temperature"], "celsius")
 
+    def test_it_carries_the_area_it_was_published_for(self):
+        """The publication's bbox, so a map can frame the towns' area without a second request."""
+        self.assertEqual(self.places(self.reader()).json()["bbox"], [32.0, 4.0, 33.25, 5.25])
+        self.assertEqual(
+            self.places(self.reader(), time="2026-09-02T15:00:00Z").json()["bbox"], [32.0, 4.0, 33.25, 5.25]
+        )
+
     def test_the_matrix_is_built_once_per_published_version(self):
         reader = self.reader()
         self.places(reader)

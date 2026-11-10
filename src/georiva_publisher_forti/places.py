@@ -310,6 +310,9 @@ def whole_run(publication, matrix, window) -> dict:
     return {
         "model": publication.slug,
         "reference_time": matrix["reference_time"],
+        # The area the towns were chosen from, west/south/east/north: what a
+        # map frames to show them.
+        "bbox": list(publication.bbox),
         "window": {"duration": window},
         "times": [matrix["times"][c] for c in cols],
         "units": matrix["units"],
@@ -349,6 +352,9 @@ def one_time(publication, matrix, window, when) -> dict:
         "type": "FeatureCollection",
         "model": publication.slug,
         "reference_time": matrix["reference_time"],
+        # The area the towns were chosen from, west/south/east/north: what a
+        # map frames to show them.
+        "bbox": list(publication.bbox),
         "time": when,
         "window": {"duration": window, "start": when, "end": end.strftime(TIME_FORMAT)},
         "times": times,
