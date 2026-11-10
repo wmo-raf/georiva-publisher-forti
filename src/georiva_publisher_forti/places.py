@@ -45,7 +45,6 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from georiva.core.models import Town
 from georiva.organisations.access import require_active_org
 
 from . import serving
@@ -54,7 +53,12 @@ from .verification import resident_areas
 
 #: ISO 8601 duration → the locationforecast block that carries it, finest first.
 WINDOWS = {"PT1H": "next_1_hours", "PT6H": "next_6_hours", "PT12H": "next_12_hours"}
-WINDOW_HOURS = {"PT1H": 1, "PT6H": 6, "PT12H": 12}
+
+
+def window_hours(window: str) -> int:
+    """``PT6H`` → 6."""
+    return int(window.removeprefix("PT").removesuffix("H"))
+
 
 #: What each town carries, per window: instants read at the window's start.
 INSTANTS = ("air_temperature", "wind_speed", "wind_from_direction")
@@ -66,6 +70,12 @@ DEFAULT_WAIT = 5
 MATRIX_TTL = 24 * 3600
 LOCK_TTL = 120
 RETRY_AFTER = "5"
+
+#: Seconds a *public* answer may be shared. Much shorter than the point route's:
+#: this URL names no version, so whatever a cache holds is what a map sees, and
+#: a long share would keep a new run's symbols behind the last run's. The ETag
+#: makes the revalidation after it cheap.
+PUBLIC_MAX_AGE = 60
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -94,7 +104,13 @@ def towns_for(publication):
     The organisation filter is written out rather than scoped through the
     request on purpose: the set is the *publication owner's*, the same for every
     caller (see the module docstring), so there is no request to scope by.
+
+    ``Town`` is imported here rather than at the top: it is newer than the core
+    this plugin otherwise supports, and a failed import of this module would
+    make core skip *all* of ``api_urls`` — the point route with it.
     """
+    from georiva.core.models import Town
+
     west, south, east, north = publication.bbox
     return list(
         Town.objects.filter(
@@ -249,6 +265,12 @@ def matrix_for(publication) -> tuple[dict, str]:
         if residency.loaded != publication.published_version:
             raise NotReady("the reader has not loaded the published version yet")
         matrix = build(publication, towns)
+        # The gate is checked again on the far side: had the reader moved on
+        # to the next run before the first town was asked, every town would
+        # answer from it with one stamp, and the matrix would be the next run
+        # cached under this one's key.
+        if resident_areas().of(publication).loaded != publication.published_version:
+            raise NotReady("the reader loaded another version during the build")
         cache.set(key, matrix, timeout=MATRIX_TTL)
         return matrix, digest
     finally:
@@ -304,7 +326,7 @@ def one_time(publication, matrix, window, when) -> dict:
     col = matrix["times"].index(when)
     values = _values(matrix, window, [col])
     start = datetime.strptime(when, TIME_FORMAT).replace(tzinfo=UTC)
-    end = start + timedelta(hours=WINDOW_HOURS[window])
+    end = start + timedelta(hours=window_hours(window))
     features = []
     for row, town in enumerate(matrix["towns"]):
         properties = {
@@ -346,6 +368,22 @@ def parse_time(raw: str) -> str:
     return value.astimezone(UTC).strftime(TIME_FORMAT)
 
 
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """``If-None-Match`` against ``etag``, weakly: nginx's gzip turns ``"x"`` into ``W/"x"``."""
+    if not header:
+        return False
+    return any(tag.strip().removeprefix("W/") in (etag, "*") for tag in header.split(","))
+
+
+def _marked(payload, publication, status_code=status.HTTP_200_OK):
+    """Marked like the point route, but shared for :data:`PUBLIC_MAX_AGE` at most."""
+    response = serving._document(payload, publication)
+    response.status_code = status_code
+    if publication.effective_visibility == publication.Visibility.PUBLIC:
+        response["Cache-Control"] = f"public, max-age={PUBLIC_MAX_AGE}"
+    return response
+
+
 def _not_ready(detail):
     response = Response({"detail": detail}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     response["Cache-Control"] = "no-store"
@@ -359,8 +397,9 @@ class PlacesView(APIView):
     No ``time``: the whole run as arrays, ``values[field][town][time]`` — what a
     map that plays through a run fetches once. ``time``: one GeoJSON
     FeatureCollection, for anything that wants towns with a forecast as plain
-    GeoJSON. Both read one matrix; both are marked like the point route, and
-    carry an ETag of the version, the towns digest and the window.
+    GeoJSON. Both read one matrix; both are marked like the point route but
+    shared for a minute at most (:data:`PUBLIC_MAX_AGE`), and carry an ETag of
+    the version, the towns digest and the window.
     """
 
     throttle_classes = [serving.ForecastThrottle]
@@ -407,15 +446,16 @@ class PlacesView(APIView):
                 status.HTTP_400_BAD_REQUEST,
             )
 
+        # Built before the ETag is compared, so a time the window cannot answer
+        # is a 404 whatever the caller holds.
+        payload = (
+            whole_run(publication, matrix, window) if when is None else one_time(publication, matrix, window, when)
+        )
         etag = f'"{matrix["version"]}-{digest}-{window}"'
-        if request.headers.get("If-None-Match") == etag:
+        if _etag_matches(request.headers.get("If-None-Match"), etag):
             # Marked exactly as the 200 it stands for would be.
-            response = serving._document(None, publication)
-            response.status_code = status.HTTP_304_NOT_MODIFIED
+            response = _marked(None, publication, status.HTTP_304_NOT_MODIFIED)
         else:
-            payload = (
-                whole_run(publication, matrix, window) if when is None else one_time(publication, matrix, window, when)
-            )
-            response = serving._document(payload, publication)
+            response = _marked(payload, publication)
         response["ETag"] = etag
         return response

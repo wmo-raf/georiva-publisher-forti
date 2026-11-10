@@ -220,6 +220,31 @@ class WholeRunTests(PlacesTestCase):
 
         self.assertEqual(response.status_code, 304)
 
+    def test_a_weak_etag_still_matches(self):
+        """nginx gzips JSON, which weakens the ETag a browser sends back."""
+        reader = self.reader()
+        etag = self.places(reader)["ETag"]
+        with patch("georiva_publisher_forti.serving.requests.get", side_effect=reader):
+            response = self.client.get("/api/forecast/ecmwf-ifs/places/", HTTP_IF_NONE_MATCH=f"W/{etag}")
+
+        self.assertEqual(response.status_code, 304)
+
+    def test_a_missing_time_is_a_404_even_with_a_matching_etag(self):
+        reader = self.reader()
+        etag = self.places(reader)["ETag"]
+        with patch("georiva_publisher_forti.serving.requests.get", side_effect=reader):
+            response = self.client.get(
+                "/api/forecast/ecmwf-ifs/places/", {"time": "2030-01-01T00:00:00Z"}, HTTP_IF_NONE_MATCH=etag
+            )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_a_public_answer_is_shared_only_briefly(self):
+        """The URL names no version, so a long share would hide a new run behind the last."""
+        response = self.places(self.reader())
+
+        self.assertEqual(response["Cache-Control"], "public, max-age=60")
+
 
 class TownSelectionTests(PlacesTestCase):
     def test_a_town_outside_the_bbox_is_not_asked_for(self):
@@ -348,6 +373,16 @@ class BuildSafetyTests(PlacesTestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(self.places(self.reader()).status_code, 200)
+
+    def test_a_reader_that_moves_on_during_the_build_is_not_cached(self):
+        """Every town can answer from the *next* run, all with one stamp."""
+        answers = iter([resident(VERSION), resident(VERSION + 1)])
+        self.residency.side_effect = lambda **kw: next(answers, resident(VERSION))
+        reader = self.reader()
+
+        self.assertEqual(self.places(reader).status_code, 503)
+        self.assertEqual(self.places(reader).status_code, 200)
+        self.assertEqual(reader.calls, 4)
 
     def test_another_area_answering_is_a_502(self):
         foreign = document(IFS_B["properties"]["timeseries"], area="other.model")
