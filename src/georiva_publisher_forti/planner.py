@@ -38,9 +38,9 @@ from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
+from . import units
 from .models import GENERATIONS_PER_REVISION
 from .prose import stamp
-from .units import same_unit, symbol_of
 from .windows import publishable
 
 #: Why a collection nobody may read anonymously is not published, said once for
@@ -225,6 +225,12 @@ def _generation_for(publication, run) -> int:
 def readable_without_credentials(collection) -> bool:
     """Whether a reader presenting nothing may be served this collection.
 
+    The reader is Forti's — ``rawdataforecaster`` and ``jsonfrontend`` serve
+    what is published to anybody who can reach them — not the publisher's own
+    read of the COGs, which goes through core's read module with the worker's
+    credentials. So the rule stands now that the publisher no longer reads a
+    public-read bucket by URL: it is about who sees the output.
+
     A predicate rather than only a refusal, because :mod:`~.readiness` asks the
     same question before a publish and has to get the same answer: a rule stated
     twice is one that disagrees with itself the first time either copy is edited.
@@ -254,10 +260,11 @@ def _resolve_slots(publication) -> dict:
     a configuration that is not finished — legal to save, impossible to publish.
     A variable from **another collection** would have no asset at any timestep,
     and refusing here says so instead of letting the step intersection come back
-    empty and blame the run. And a **wrong unit** is the one that publishes
-    successfully: Forti copies units out of ``meta.json`` without interpreting
-    them, so a slot filled from a variable in kelvin publishes a number wrong by
-    273 under a label that says celsius, and every layer downstream agrees.
+    empty and blame the run. And a **unit that cannot be converted**: every slot
+    is read in the unit its parameter publishes — Forti copies the label out of
+    ``meta.json`` without interpreting it — converted on read from the
+    variable's source unit (ADR 0046 §11). Kelvin is read as celsius; a
+    pressure cannot be, and is refused here rather than at the read.
 
     The last two are checked at the mapping too, and deliberately twice: that
     check is what a form can show, and this one is what holds when nothing went
@@ -290,15 +297,17 @@ def _resolve_slots(publication) -> dict:
     wrong = []
     for key, variable in by_slot.items():
         want = params.BY_SLOT[key].units
-        have = symbol_of(variable)
-        if not same_unit(have, want):
-            wrong.append(f"{key} ← {variable.slug} is {have!r}, expected {want!r}")
+        reason = units.refusal(variable, want)
+        if reason is not None:
+            wrong.append(
+                f"{key} ← {variable.slug} is stored in {units.source_symbol(variable)!r}, "
+                f"which cannot be read in {want!r} ({reason})"
+            )
     if wrong:
         raise PublicationRefused(
-            "Units do not match what the parameter map publishes: "
+            "Each slot is read in the unit its parameter publishes, and these cannot be: "
             + "; ".join(wrong)
-            + ". Forti reads units from meta.json without converting, so this would "
-            "publish a wrong number under a right-looking label."
+            + ". Map a variable whose values can be converted to that unit."
         )
 
     return by_slot

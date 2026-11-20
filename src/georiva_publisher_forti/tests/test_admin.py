@@ -38,7 +38,7 @@ from georiva_publisher_forti import forms
 from georiva_publisher_forti import parameters as params
 from georiva_publisher_forti.models import NOT_A_FORECAST, FortiPublication
 
-from .factories import make_collection, make_publication, make_user
+from .factories import make_collection, make_publication, make_user, restate_source_unit
 
 ADD_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:add"
 EDIT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:edit"
@@ -274,9 +274,9 @@ class WhatTheFormAdmitsTests(MappingEditorMixin, TestCase):
 class UnitRefusalTests(MappingEditorMixin, TestCase):
     """The one hard refusal, met through the form rather than through save().
 
-    Forti copies units out of ``meta.json`` without interpreting them, so a
-    slot whose variable is in kelvin publishes a number wrong by 273 under a
-    label that says celsius, and every layer downstream agrees.
+    Forti copies units out of ``meta.json`` without interpreting them, so every
+    slot is read in its parameter's unit, converted from the variable's source
+    unit. A source unit that cannot be converted to it is refused.
     """
 
     def setUp(self):
@@ -284,19 +284,19 @@ class UnitRefusalTests(MappingEditorMixin, TestCase):
         # A ninth variable rather than a retuned one of the eight. Retuning a
         # variable that already fills a slot refuses *that* slot too, which is
         # correct and would hide whether the refusal lands where it was aimed.
-        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
-        self.kelvin_variable = Variable.objects.create(
+        hectopascal, _ = Unit.objects.get_or_create(symbol="hPa", defaults={"name": "Hectopascal"})
+        self.pressure_variable = Variable.objects.create(
             collection=self.collection,
-            slug="t2m-kelvin",
-            name="t2m-kelvin",
-            unit=kelvin,
-            source_unit=kelvin,
+            slug="msl-pressure",
+            name="msl-pressure",
+            unit=hectopascal,
+            source_unit=hectopascal,
             value_min=-100,
             value_max=2000,
         )
 
-    def test_a_unit_that_disagrees_with_its_slot_cannot_be_saved(self):
-        response = self.remap("2t", self.kelvin_variable)
+    def test_a_unit_that_cannot_be_converted_to_its_slot_cannot_be_saved(self):
+        response = self.remap("2t", self.pressure_variable)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.stored("2t"), self.variable("2t"))
@@ -304,24 +304,21 @@ class UnitRefusalTests(MappingEditorMixin, TestCase):
     def test_the_refusal_says_what_would_have_been_published(self):
         """Not "invalid unit" — the parameters that would have carried it, which
         is what an operator would otherwise have found out from a consumer."""
-        response = self.remap("2t", self.kelvin_variable)
+        response = self.remap("2t", self.pressure_variable)
         (message,) = response.context["form"].errors[forms.field_name("2t")]
 
         self.assertIn("air_temperature_2m", message)
         self.assertIn("degC", message)
 
     def test_the_refusal_lands_on_the_slot_it_is_about(self):
-        response = self.remap("2t", self.kelvin_variable)
+        response = self.remap("2t", self.pressure_variable)
 
         self.assertNotIn(forms.field_name("2d"), response.context["form"].errors)
 
     def test_a_unit_spelled_differently_is_the_same_unit(self):
-        """``°C`` and ``degC`` are one unit and kelvin is not, which is why the
-        comparison goes through pint rather than through string equality."""
-        degrees, _ = Unit.objects.get_or_create(symbol="°C", defaults={"name": "Degrees Celsius"})
-        variable = self.variable("2t")
-        variable.unit = degrees
-        variable.save(update_fields=["unit"])
+        """``°C`` and ``degC`` are one unit, which is why the comparison goes
+        through pint rather than through string equality."""
+        variable = restate_source_unit(self.variable("2t"), "°C")
 
         response = self.remap("2d", variable, acknowledge=True)
 
@@ -530,9 +527,9 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
         Variable.objects.filter(pk=self.variable("2t").pk).update(slug="temperature-2m")
         Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
 
-    def in_kelvin(self, slug):
-        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
-        Variable.objects.filter(pk=self.variable(slug).pk).update(unit=kelvin)
+    def in_the_wrong_unit(self, slug):
+        """Bytes in hectopascals, which no slot ``2t`` or ``tcc`` can read."""
+        restate_source_unit(self.variable(slug), "hPa")
 
     def test_the_offer_names_the_blank_slots_it_would_fill(self):
         response = self.client.get(self.url)
@@ -566,18 +563,18 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
         """Offered, it could only be refused — and a refusal on applying refuses
         the whole save, the rows that would have been fine with it. An offer
         that cannot succeed as offered is a button that reads as broken."""
-        self.in_kelvin("2t")
+        self.in_the_wrong_unit("2t")
 
         self.assertEqual(self.offer().slots, ("tcc",))
 
     def test_there_is_no_offer_when_every_match_is_in_the_wrong_unit(self):
-        self.in_kelvin("2t")
+        self.in_the_wrong_unit("2t")
         Variable.objects.filter(pk=self.variable("tcc").pk).update(slug="cloud-cover")
 
         self.assertIsNone(self.offer())
 
     def test_applying_it_leaves_a_wrong_unit_match_blank(self):
-        self.in_kelvin("2t")
+        self.in_the_wrong_unit("2t")
 
         self.assertEqual(self.apply().status_code, 302)
 
@@ -637,8 +634,8 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
     def test_the_unit_refusal_still_applies(self):
         """To the rows chosen by hand on the same submit: taking the offer is a
         save, and a save refuses a wrong unit wherever it came from."""
-        by_hand = self.variable_like("t2m-kelvin", like="2t")
-        self.in_kelvin("t2m-kelvin")
+        by_hand = self.variable_like("t2m-pressure", like="2t")
+        self.in_the_wrong_unit("t2m-pressure")
 
         response = self.apply(**{forms.field_name("2t"): by_hand.pk})
 

@@ -3,7 +3,7 @@
 Three vocabularies meet here and none of them can be guessed:
 
 *GeoRiva* names a variable by its slug (``2t``, ``tcc``) and stores it in the
-variable's own output unit. *Forti's internal format* names a parameter in
+variable's source unit, converting it when it is read (ADR 0046). *Forti's internal format* names a parameter in
 ``meta.json`` and knows nothing about what it means — it is an int16 array, a
 scale factor and a list of valid times. *locationforecast 2.0* names the field a
 consumer finally reads.
@@ -32,13 +32,15 @@ A zero or missing scale factor decodes as **0.1**, not 1 (`values.go:31`). For
 the weather symbol that turns code 46 into 4.6 and then into no symbol at all, so
 the factor is stated for every parameter and never left to ``omitempty``.
 
-## Units are not converted here
+## Units are converted on read, to the unit each parameter declares
 
-Forti reads units straight out of ``meta.json`` (`encode.go:88`), so what we
-publish is whatever the COGs hold. Each parameter therefore declares the GeoRiva
-unit symbol it *expects*, and the planner refuses a variable that has been
-retuned to something else — a collection restated in kelvin would otherwise
-publish plausible-looking nonsense.
+Forti reads units straight out of ``meta.json`` (`encode.go:88`) without
+interpreting them, so what we publish must be in exactly the unit we label it.
+Each parameter therefore declares the GeoRiva unit symbol it *expects*, and the
+publisher reads its slot in that unit through core's read module, which converts
+from the variable's source unit — kelvin is read as celsius. A variable whose
+source unit cannot be converted to it (a pressure in a temperature slot, a mass
+per area not flagged as water) is refused.
 """
 
 from dataclasses import dataclass
@@ -82,7 +84,8 @@ class Parameter:
     """GeoRiva variable slug, or None when derived."""
 
     expects_unit: str | None = None
-    """The GeoRiva unit symbol the source variable must carry, if any."""
+    """The GeoRiva unit symbol the source variable is read in. Its source unit
+    must convert to it."""
 
     derivation: str | None = None
     """Recipe name in ``derivations.py``, for a derived series."""
@@ -289,7 +292,7 @@ DERIVATION_INPUTS = {
 
 #: The unit expected of a slot no parameter publishes directly. ``tp`` is read
 #: by four derivations and written by none, so no ``Parameter`` above declares
-#: its unit — and the unit check is a hard refusal, so every slot must have one.
+#: its unit — and every slot is read in a declared unit, so every slot must have one.
 DERIVED_INPUT_UNITS = {
     "tp": "mm",
 }
@@ -297,9 +300,9 @@ DERIVED_INPUT_UNITS = {
 #: What each slot's values plausibly span, in the slot's own unit — generous on
 #: purpose, because this is the loose half of a pair whose other half is exact.
 #:
-#: The unit check refuses kelvin under a celsius label. It cannot see the same
-#: mistake made one layer up: a variable whose unit row *says* ``degC`` while its
-#: numbers are kelvin agrees with the slot and publishes 297 degrees. What is
+#: The unit check converts kelvin to celsius and refuses a pressure. It cannot see
+#: a mislabelled variable: one whose source unit *says* ``degC`` while its
+#: numbers are kelvin is read as celsius and publishes 297 degrees. What is
 #: left to notice it with is the variable's declared range, which core documents
 #: as a styling hint — "minimum expected data value … used for color mapping" —
 #: and which is therefore evidence rather than proof. So the bounds below are
@@ -352,7 +355,8 @@ class Slot:
     """The GeoRiva slug this role is named by — and what auto-match looks for."""
 
     units: str
-    """The unit symbol a variable must carry to fill it. A hard refusal."""
+    """The unit symbol the slot is read in. A variable whose source unit cannot
+    be converted to it is refused."""
 
     feeds: tuple[str, ...]
     """The Forti parameters that read it, so a surface can say what a wrong
@@ -398,9 +402,9 @@ def _build_slots() -> tuple[Slot, ...]:
     if undeclared:
         raise RuntimeError(
             f"Slot(s) {', '.join(sorted(undeclared))} declare no expected unit. Forti copies "
-            f"units out of meta.json without interpreting them, so an unchecked slot is a "
-            f"number published wrong by a constant under a label that looks right. Give the "
-            f"parameter an expects_unit, or add the slot to DERIVED_INPUT_UNITS."
+            f"units out of meta.json without interpreting them, so every slot is read in a "
+            f"declared unit; one without would publish whatever unit its variable is served in. "
+            f"Give the parameter an expects_unit, or add the slot to DERIVED_INPUT_UNITS."
         )
 
     unbounded = [key for key in feeds if key not in PLAUSIBLE_RANGES]

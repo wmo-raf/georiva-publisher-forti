@@ -87,4 +87,3 @@ def from_raster_window(transform, rows: int, cols: int, row_offset: int, col_off
     longitude_grid = np.tile(longitude, rows)
 
     return Grid(latitude=latitude_grid, longitude=longitude_grid, rows=rows, cols=cols)
-

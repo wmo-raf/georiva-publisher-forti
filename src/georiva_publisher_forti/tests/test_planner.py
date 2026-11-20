@@ -9,8 +9,9 @@ different step counts — 13 to 16 of 16 on a live run. A step some variables ha
 and others do not is a partial forecast, and Forti has no way to express one.
 
 **The unit check.** Forti copies units out of ``meta.json`` without interpreting
-them, so a collection retuned from celsius to kelvin publishes a number wrong by
-273 under a label that says celsius, and nothing downstream can tell.
+them, so every slot is read in the unit its parameter publishes — converted on
+read from the Variable's source unit (ADR 0046 §11). A source unit that cannot be
+converted to it is refused here, before anything is read.
 """
 
 from datetime import timedelta
@@ -23,7 +24,7 @@ from georiva.core.models import Asset, Collection, Unit, Variable
 from georiva_publisher_forti.models import GENERATIONS_PER_REVISION, FortiPublication
 from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
 
-from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
+from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, restate_source_unit, write_cogs
 
 
 class PlannerTestCase(TestCase):
@@ -169,10 +170,7 @@ class SourceValidationTests(PlannerTestCase):
 
     def test_a_mapped_wind_gust_in_the_wrong_unit_is_still_refused(self):
         """Optional means it may be absent, not that it may be wrong."""
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
-        variable = self.collection.variables.get(slug="10fg")
-        variable.unit = kelvin
-        variable.save(update_fields=["unit"])
+        restate_source_unit(self.collection.variables.get(slug="10fg"), "K")
         write_cogs(self.collection, self.path)
         make_run(self.collection)
 
@@ -181,11 +179,8 @@ class SourceValidationTests(PlannerTestCase):
 
         self.assertIn("10fg", str(ctx.exception))
 
-    def test_a_variable_in_the_wrong_unit_is_refused(self):
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
-        variable = self.collection.variables.get(slug="2t")
-        variable.unit = kelvin
-        variable.save(update_fields=["unit"])
+    def test_a_variable_whose_source_unit_cannot_reach_the_slot_is_refused(self):
+        restate_source_unit(self.collection.variables.get(slug="2t"), "hPa")
         write_cogs(self.collection, self.path)
         make_run(self.collection)
 
@@ -193,15 +188,23 @@ class SourceValidationTests(PlannerTestCase):
             plan(self.publication)
 
         self.assertIn("2t", str(ctx.exception))
-        self.assertIn("without converting", str(ctx.exception))
+        self.assertIn("cannot be read in", str(ctx.exception))
+
+    def test_a_variable_stored_in_kelvin_is_planned(self):
+        """Converted on read (ADR 0046 §11), so not refused."""
+        restate_source_unit(self.collection.variables.get(slug="2t"), "K")
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        self.assertEqual(plan(self.publication).step_count, 9)
 
     def test_the_unit_check_follows_the_mapping_rather_than_the_slug(self):
         """A variable named anything at all is checked against the slot it was
         mapped into — which is the only unit that can be compared, now that the
         name no longer says what the value means."""
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
+        hectopascal, _ = Unit.objects.get_or_create(symbol="hPa", defaults={"name": "Hectopascal"})
         write_cogs(self.collection, self.path)
-        self._remap("2t", _renamed_copy_of(self.collection, "2t", "temperature-2m", unit=kelvin))
+        self._remap("2t", _renamed_copy_of(self.collection, "2t", "temperature-2m", unit=hectopascal))
         make_run(self.collection)
 
         with self.assertRaises(PublicationRefused) as ctx:
@@ -211,11 +214,8 @@ class SourceValidationTests(PlannerTestCase):
 
     def test_two_spellings_of_one_unit_agree(self):
         """``°C`` and ``degC`` depend on which seed wrote the row and are the
-        same unit; kelvin is compatible with both and is not."""
-        degrees, _ = Unit.objects.get_or_create(symbol="°C", defaults={"name": "Celsius (degree sign)"})
-        variable = self.collection.variables.get(slug="2t")
-        variable.unit = degrees
-        variable.save(update_fields=["unit"])
+        same unit."""
+        restate_source_unit(self.collection.variables.get(slug="2t"), "°C")
         write_cogs(self.collection, self.path)
         make_run(self.collection)
 

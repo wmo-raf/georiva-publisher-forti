@@ -53,9 +53,7 @@ class WindowReader:
         Read as stored: the geometry does not depend on the unit."""
         west, south, east, north = self.bbox
         if west >= east or south >= north:
-            raise ValueError(
-                f"bbox must be (west, south, east, north) with west<east and south<north, got {self.bbox}"
-            )
+            raise ValueError(f"bbox must be (west, south, east, north) with west<east and south<north, got {self.bbox}")
         field = self.session.window(asset, self.bbox, in_unit=values.SOURCE_UNIT)
         if field.crs != WGS84:
             raise ValueError(

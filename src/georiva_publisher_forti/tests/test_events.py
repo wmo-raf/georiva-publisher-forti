@@ -260,7 +260,9 @@ class TimelineTests(ChainTestCase):
 
         # The Timeline draws a chain as a rail along caused_by (core's ADR 0030).
         written = [
-            row.entry for row in response.context["layout"].rows if row.entry.event_type == PublicationWritten._meta.label_lower
+            row.entry
+            for row in response.context["layout"].rows
+            if row.entry.event_type == PublicationWritten._meta.label_lower
         ]
         self.assertEqual(len(written), 1)
         self.assertEqual(written[0].caused_by_id, closed.pk)

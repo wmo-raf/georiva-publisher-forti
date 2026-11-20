@@ -70,9 +70,13 @@ class ReaderTestCase(AssetsOnDiskMixin, TestCase):
             blockysize=256,
         ) as destination:
             destination.write(data.astype("float32"), 1)
-        item = self.item if name == "00" else Item.objects.get_or_create(
-            collection=self.collection, time=TIME.replace(hour=int(name)), reference_time=TIME
-        )[0]
+        item = (
+            self.item
+            if name == "00"
+            else Item.objects.get_or_create(
+                collection=self.collection, time=TIME.replace(hour=int(name)), reference_time=TIME
+            )[0]
+        )
         return Asset.objects.create(item=item, variable=variable, href=href, format=Asset.Format.COG)
 
 
@@ -176,7 +180,9 @@ class OrdinalTests(ReaderTestCase):
         """Forti's points are latitude and longitude; a projected grid's
         coordinates are metres."""
         variable = self.variable("2t-merc", "degC", "degC")
-        asset = self.cog(variable, "00", positions(40, 40), from_origin(3_000_000, 1_000_000, 25_000, 25_000), "EPSG:3857")
+        asset = self.cog(
+            variable, "00", positions(40, 40), from_origin(3_000_000, 1_000_000, 25_000, 25_000), "EPSG:3857"
+        )
 
         with values.session() as session, self.assertRaises(ValueError) as ctx:
             WindowReader(session, (28.0, 1.0, 33.0, 5.0)).resolve(asset)

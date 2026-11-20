@@ -143,11 +143,13 @@ A parameter is published only if the run's own time index can express its window
 so a 3-hourly feed publishes the 6- and 12-hour series and none of the 1-hour
 ones, without anybody configuring that.
 
-Units are **not converted** — Forti reads them from `meta.json` (`encode.go:88`)
-without interpreting them. The planner instead refuses a variable whose unit is
-not the one the map publishes: a collection retuned from `°C` to `K` would
-otherwise publish a number wrong by 273 under a label that says celsius. Compared
-through pint, so `°C` and `degC` agree and `K` does not.
+Units are **converted on read** — Forti reads them from `meta.json`
+(`encode.go:88`) without interpreting them, so each slot is read through core's
+read module (`georiva.core.values`, ADR 0046) in the unit the map publishes,
+converted from the variable's source unit: a COG in `K` is published in `°C`. A
+source unit core cannot convert to it — another dimension, or `kg m-2` into `mm`
+for a variable not flagged as water — is refused at the mapping, in Readiness and
+at the planner, with core's reason.
 
 ## Derivations
 

@@ -12,9 +12,10 @@ The mapping has been data since #12 and editable only from a shell. The form is
 the surface, and the surface is where the feature's one real difficulty lives:
 **three answers, not two.**
 
-A unit that disagrees with its slot is **refused**, because Forti copies units
-out of ``meta.json`` without interpreting them and the number published would be
-wrong by a constant under a label that looks right.
+A unit that cannot be converted to its slot's is **refused**. Forti copies units
+out of ``meta.json`` without interpreting them, so each slot is read in the unit
+its parameter publishes, converted from the variable's source unit; a variable
+whose source unit cannot reach it has nothing right to publish.
 
 A mapping that is merely suspicious — one variable in two slots, a declared
 range that cannot reach the slot's — **warns**, and saves once the warning is
@@ -108,7 +109,7 @@ COLLECTION_IS_MAPPED = (
 #: merely being true of the code, because the page is where somebody decides
 #: how much the saved mapping is worth.
 CHECKS_MADE = (
-    "The unit of the variable matches the unit of the Forti parameter.",
+    "The values of the variable can be converted to the unit of the Forti parameter.",
     "No variable is used twice.",
     "The value range of the variable looks plausible for the parameter.",
 )

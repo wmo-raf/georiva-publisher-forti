@@ -28,7 +28,7 @@ distinctions *are* the feature.
 
 Six findings. Five are the ones an operator meets in order — whether the
 collection is a forecast, how many closed runs it has and when the latest was,
-whether every slot resolves, whether the units agree, and how many steps the
+whether every slot resolves, whether the units convert, and how many steps the
 latest run would actually publish.
 
 The sixth is the collection's **visibility**, and it is here because
@@ -72,10 +72,9 @@ from dataclasses import dataclass
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
-from . import planner
+from . import planner, units
 from .models import NOT_A_FORECAST
 from .prose import listed, stamp
-from .units import same_unit, symbol_of
 from .windows import publishable
 
 #: Nothing is in the way of this one.
@@ -157,7 +156,7 @@ SUBJECTS = {
     "visibility": "Collection is public",
     "runs": "Forecast runs received",
     "slots": "Variables set",
-    "units": "Units match",
+    "units": "Units convert",
     "steps": "Steps ready to publish",
 }
 
@@ -371,11 +370,11 @@ def _slots(collection, mapped: dict, blank: list, foreign: list) -> Finding:
 
 
 def _units(mapped: dict) -> Finding:
-    """Whether each filled slot carries the unit that slot publishes.
+    """Whether each filled slot's values can be read in the unit that slot publishes.
 
-    Compared through :func:`~.units.same_unit`, which is what the mapping and
-    the planner both compare through, so ``°C`` and ``degC`` agree here exactly
-    as they agree there and kelvin disagrees in all three places.
+    Asked through :func:`~.units.refusal`, which is what the mapping and the
+    planner both ask, so kelvin converts to celsius here exactly as it does
+    there and a pressure in a temperature slot is refused in all three places.
 
     Only the **filled** slots. A blank slot has no unit to disagree, and calling
     that a unit fault would report one cause as two — the row above already says
@@ -393,18 +392,23 @@ def _units(mapped: dict) -> Finding:
     wrong = []
     for key, variable in filled.items():
         want = params.BY_SLOT[key].units
-        have = symbol_of(variable)
-        if not same_unit(have, want):
-            wrong.append(f"{variable.slug} is in {have}, but {key} must be in {want}")
+        reason = units.refusal(variable, want)
+        if reason is not None:
+            wrong.append(
+                f"{variable.slug} is stored in {units.source_symbol(variable)}, which cannot be read "
+                f"as {want} for {key} ({reason})"
+            )
 
     if wrong:
         return Finding(
             key="units",
             state=BLOCKED,
-            answer=f"{len(wrong)} disagree",
-            detail="Units are not converted, so the numbers would be wrong: " + "; ".join(wrong) + ".",
+            answer=f"{len(wrong)} cannot be converted",
+            detail="Each value is converted to the unit its Forti parameter publishes, and these cannot be: "
+            + "; ".join(wrong)
+            + ".",
         )
-    return Finding(key="units", state=READY, answer=f"{len(filled)} agree")
+    return Finding(key="units", state=READY, answer=f"{len(filled)} convert")
 
 
 def _steps(collection, run, mapped: dict, refused: bool) -> Finding:

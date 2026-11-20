@@ -159,9 +159,7 @@ def make_run(collection, reference_time=REFERENCE_TIME, closed=True):
     return run
 
 
-def write_cogs(
-    collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=(), constants=None
-):
+def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=(), constants=None):
     """One GeoTIFF per variable per step, and the Items and Assets naming them.
 
     ``skip`` names variables to leave out of the *last* step, which is how a real
@@ -228,3 +226,12 @@ def _write_tif(path, value):
         transform=TRANSFORM,
     ) as destination:
         destination.write(data, 1)
+
+
+def restate_source_unit(variable, symbol, water=False):
+    """Say ``variable``'s bytes hold ``symbol`` — as a queryset update, the way
+    core's Correct source unit action would, since the source unit is locked
+    once the Variable has assets (ADR 0046 §8). Returns the reloaded row."""
+    unit, _ = Unit.objects.get_or_create(symbol=symbol, defaults={"name": symbol})
+    Variable.objects.filter(pk=variable.pk).update(source_unit=unit, water=water)
+    return Variable.objects.get(pk=variable.pk)

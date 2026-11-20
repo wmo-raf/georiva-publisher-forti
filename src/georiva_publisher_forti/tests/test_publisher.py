@@ -15,10 +15,7 @@ actually stage first.
 """
 
 import json
-import shutil
-import tempfile
 from datetime import timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
