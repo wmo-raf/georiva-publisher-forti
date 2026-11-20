@@ -24,23 +24,23 @@ from unittest.mock import patch
 import numpy as np
 from django.test import TestCase
 
+from georiva.core.models import Unit, Variable
 from georiva.core.publishing import MarkerOrderingError
 from georiva_publisher_forti import config, publisher
 from georiva_publisher_forti.models import FortiPublication
 from georiva_publisher_forti.publisher import GridMoved, publish
 
+from .assets_on_disk import AssetsOnDiskMixin
 from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
 from .sink_isolation import TemporarySinkMixin
 
 
-class PublishTestCase(TemporarySinkMixin, TestCase):
+class PublishTestCase(AssetsOnDiskMixin, TemporarySinkMixin, TestCase):
     def setUp(self):
-        self.cogs = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.cogs, ignore_errors=True)
-
-        # The one seam between this plugin and object storage.
+        # The two seams between this plugin and object storage: the assets
+        # bucket core reads values from, and the sink publications go to.
         self.isolate_sink()
-        self._patch_urls()
+        self.cogs = self.isolate_assets()
 
         self.collection = make_collection()
         self.publication = make_publication(self.collection)
@@ -49,17 +49,6 @@ class PublishTestCase(TemporarySinkMixin, TestCase):
         self.area_key = self.publication.area_key
         write_cogs(self.collection, self.cogs, step_hours=3, steps=9)
         make_run(self.collection)
-
-    def _patch_urls(self):
-        original = publisher.WindowReader
-        cogs = self.cogs
-
-        from georiva_publisher_forti import reader as reader_module
-
-        original_asset_url = reader_module.asset_url
-        reader_module.asset_url = lambda href: str(cogs / href)
-        self.addCleanup(setattr, reader_module, "asset_url", original_asset_url)
-        self.addCleanup(setattr, publisher, "WindowReader", original)
 
     def sink(self):
         return self.publication.sink()
@@ -122,6 +111,29 @@ class EndToEndTests(PublishTestCase):
         at_point_7_step_0 = values[7 * stride + entry["slice_from"]]
 
         self.assertAlmostEqual(float(at_point_7_step_0) * entry["scale_factor"], 24.0, places=5)
+
+    def test_a_variable_stored_in_kelvin_is_published_in_celsius(self):
+        """The COGs hold their Variable's source unit (ADR 0046 §1); the slot
+        publishes degC, and the read converts — 297.15 K is 24 °C."""
+        Variable.objects.filter(collection=self.collection, slug="2t").update(source_unit=self.kelvin())
+        write_cogs(self.collection, self.cogs, step_hours=3, steps=9, constants={"2t": 297.15})
+        publish(self.publication)
+        sink = self.sink()
+        version = self.reread().published_version
+        grid_id = self.reread().grid_id
+
+        meta = json.loads(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/meta.json"))
+        values = np.frombuffer(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/data"), dtype="<i2")
+
+        entry = meta["parameters"]["air_temperature_2m"]
+        at_point_7_step_0 = values[7 * meta["number_of_points"] + entry["slice_from"]]
+
+        self.assertEqual(entry["units"], "celsius")
+        self.assertAlmostEqual(float(at_point_7_step_0) * entry["scale_factor"], 24.0, places=5)
+
+    def kelvin(self):
+        unit, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
+        return unit
 
     def test_the_precipitation_window_is_what_fell_over_six_hours(self):
         """``tp`` accumulates by 0.5 mm per 3-hour step, so a 6-hour window is

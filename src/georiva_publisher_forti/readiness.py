@@ -49,7 +49,7 @@ is fine.
 ## Where the rules come from
 
 Every rule here is the planner's, reached through the planner:
-:func:`~.planner.readable_without_credentials`, :func:`~.planner.cog_hrefs`,
+:func:`~.planner.readable_without_credentials`, :func:`~.planner.cog_assets`,
 :func:`~.planner.shared_times`, :func:`~.planner.spans_a_period`, and
 :data:`~.models.NOT_A_FORECAST` and :data:`~.planner.NOT_PUBLIC` for the two
 sentences a refusal and a finding have to say identically. What is written here
@@ -441,8 +441,8 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
         )
 
     filled = {key: variable for key, variable in mapped.items() if variable is not None}
-    hrefs = planner.cog_hrefs(collection, run.reference_time, filled)
-    shared = planner.shared_times(hrefs)
+    assets = planner.cog_assets(collection, run.reference_time, filled)
+    shared = planner.shared_times(assets)
     when = stamp(run.reference_time)
 
     if not shared:
@@ -464,8 +464,8 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
             ),
         )
 
-    reached = max(len(times) for times in hrefs.values())
-    behind = [slot for slot, times in hrefs.items() if len(times) < reached]
+    reached = max(len(times) for times in assets.values())
+    behind = [slot for slot, times in assets.items() if len(times) < reached]
     if behind:
         return Finding(
             key="steps",

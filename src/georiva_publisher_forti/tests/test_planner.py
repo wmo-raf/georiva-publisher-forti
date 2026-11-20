@@ -156,7 +156,7 @@ class SourceValidationTests(PlannerTestCase):
         self.assertNotIn("wind_speed_of_gust", names)
         self.assertIn("air_temperature_2m", names)
         self.assertIn("weather_symbol_6h", names)
-        self.assertNotIn("10fg", publish_plan.hrefs)
+        self.assertNotIn("10fg", publish_plan.assets)
         self.assertNotIn("10fg", publish_plan.mapping)
 
     def test_wind_gust_is_published_when_it_is_mapped(self):
@@ -252,7 +252,7 @@ class SourceValidationTests(PlannerTestCase):
 
         publish_plan = plan(self.publication)
 
-        self.assertEqual(publish_plan.hrefs["2d"], publish_plan.hrefs["2t"])
+        self.assertEqual(publish_plan.assets["2d"], publish_plan.assets["2t"])
 
     def test_a_non_public_collection_is_refused(self):
         self.collection.visibility = Collection.Visibility.PRIVATE

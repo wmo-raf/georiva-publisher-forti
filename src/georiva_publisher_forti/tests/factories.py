@@ -2,8 +2,8 @@
 
 The publisher's whole job is turning rasters into bytes, so a test that fakes the
 raster tests the half that was never in doubt. These write real GeoTIFFs into a
-temporary directory and point ``reader.asset_url`` at them, which is the one seam
-between this plugin and object storage.
+temporary directory that stands in for core's assets bucket
+(:mod:`.assets_on_disk`), which is where core's read module reads them from.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -159,12 +159,16 @@ def make_run(collection, reference_time=REFERENCE_TIME, closed=True):
     return run
 
 
-def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=()):
+def write_cogs(
+    collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=(), constants=None
+):
     """One GeoTIFF per variable per step, and the Items and Assets naming them.
 
     ``skip`` names variables to leave out of the *last* step, which is how a real
-    run looks while its stragglers are still ingesting.
+    run looks while its stragglers are still ingesting. ``constants`` replaces
+    the value written for a variable — one stored in another unit, say.
     """
+    constants = {**CONSTANTS, **(constants or {})}
     variables = {variable.slug: variable for variable in collection.variables.all()}
     hrefs = {}
 
@@ -180,7 +184,7 @@ def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFE
             if slug in skip and step == steps - 1:
                 continue
 
-            value = step * 0.5 if slug == "tp" else CONSTANTS[slug]
+            value = step * 0.5 if slug == "tp" else constants[slug]
             href = f"{slug}/{step:02d}.tif"
             path = directory / href
             path.parent.mkdir(parents=True, exist_ok=True)
