@@ -24,10 +24,10 @@ from tempfile import TemporaryDirectory
 
 from django.test import TestCase
 
-from georiva.core.models import Collection, Unit
+from georiva.core.models import Collection
 from georiva_publisher_forti import readiness
 
-from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, write_cogs
+from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, restate_source_unit, write_cogs
 
 
 class ReadinessTests(TestCase):
@@ -76,24 +76,30 @@ class ReadinessTests(TestCase):
         self.assertIn("2t", self.finding(report, "slots").detail)
         self.assertEqual(report.state, readiness.BLOCKED)
 
-    def test_a_unit_that_disagrees_is_a_change_rather_than_a_wait(self):
-        """Forti copies units out of ``meta.json`` without converting, so this
-        is the refusal that would otherwise be met at the first publish — and
-        the one an operator most needs to meet before it, because the publish it
-        stops is the one that would have served a number wrong by 273."""
+    def test_a_unit_that_cannot_be_converted_is_a_change_rather_than_a_wait(self):
+        """The refusal that would otherwise be met at the first publish, and
+        one no amount of waiting resolves: hectopascals cannot be read as a
+        temperature."""
         write_cogs(self.collection, self.path, steps=9)
         make_run(self.collection)
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
-        variable = self.collection.variables.get(slug="2t")
-        variable.unit = kelvin
-        variable.save(update_fields=["unit"])
+        restate_source_unit(self.collection.variables.get(slug="2t"), "hPa")
 
         report = readiness.report(self.publication)
 
         units = self.finding(report, "units")
         self.assertEqual(units.state, readiness.BLOCKED)
         self.assertIn("2t", units.detail)
-        self.assertIn("K", units.detail)
+        self.assertIn("hPa", units.detail)
+
+    def test_a_unit_the_read_converts_is_ready(self):
+        """Kelvin bytes are read in degC (ADR 0046 §11)."""
+        write_cogs(self.collection, self.path, steps=9)
+        make_run(self.collection)
+        restate_source_unit(self.collection.variables.get(slug="2t"), "K")
+
+        units = self.finding(readiness.report(self.publication), "units")
+
+        self.assertEqual(units.state, readiness.READY)
 
     def test_a_complete_run_says_how_many_steps_it_would_publish(self):
         """The figure the build log carried and nothing rendered. An operator
@@ -214,10 +220,7 @@ class ReadinessTests(TestCase):
         rest is fine."""
         write_cogs(self.collection, self.path, steps=9)
         make_run(self.collection)
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
-        variable = self.collection.variables.get(slug="2t")
-        variable.unit = kelvin
-        variable.save(update_fields=["unit"])
+        restate_source_unit(self.collection.variables.get(slug="2t"), "hPa")
 
         report = readiness.report(self.publication)
 

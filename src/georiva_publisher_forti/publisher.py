@@ -18,11 +18,12 @@ import logging
 import numpy as np
 from django.db import transaction
 
+from georiva.core import values
 from georiva.events.context import ensure_context
 from georiva.events.recording import record
 
 from . import derivations
-from .grid import from_raster_window
+from . import parameters as params
 from .models import ACTOR, GENERATIONS_PER_REVISION, SINK_ROOT, PublicationWritten
 from .planner import NothingToPublish, PublicationRefused, latest_item_geometry, plan
 from .reader import WindowReader
@@ -209,19 +210,25 @@ def _read(publication, publish_plan):
     if item is None:
         raise NothingToPublish(f"{publication.collection.slug} has no item for {publish_plan.reference_time}")
 
-    reader = WindowReader(publication.bbox)
-    first_href = next(iter(publish_plan.hrefs.values()))[0]
-    row_off, col_off, rows, cols = reader.resolve(first_href)
-    grid = from_raster_window(reader.transform, rows, cols, row_off, col_off)
+    # One reading session per publish (ADR 0046 §12), and every slot read in
+    # the unit its parameter publishes: the bytes are in each Variable's source
+    # unit, and Forti copies the unit label out of meta.json without
+    # interpreting it, so the conversion happens here or nowhere (§20).
+    with values.session() as session:
+        reader = WindowReader(session, publication.bbox)
+        grid = reader.resolve(next(iter(publish_plan.assets.values()))[0])
 
-    if publication.grid_id and publication.grid_id != grid.identifier:
-        raise GridMoved(
-            f"{publication.area_key}: the point list changed — pinned {publication.grid_id}, "
-            f"now {grid.identifier} ({grid.point_count} points). Either the bbox was edited "
-            f"or the source raster's geometry moved; both invalidate every stored ordinal."
-        )
+        if publication.grid_id and publication.grid_id != grid.identifier:
+            raise GridMoved(
+                f"{publication.area_key}: the point list changed — pinned {publication.grid_id}, "
+                f"now {grid.identifier} ({grid.point_count} points). Either the bbox was edited "
+                f"or the source raster's geometry moved; both invalidate every stored ordinal."
+            )
 
-    cubes = {slot: reader.read_series(hrefs) for slot, hrefs in publish_plan.hrefs.items()}
+        cubes = {
+            slot: reader.read_series(assets, in_unit=params.BY_SLOT[slot].units)
+            for slot, assets in publish_plan.assets.items()
+        }
     return grid, cubes
 
 

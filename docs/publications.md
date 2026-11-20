@@ -53,8 +53,10 @@ names its variables otherwise gets blank rows to fill in rather than a refusal i
 can do nothing about.
 
 A **blank slot** saves and is reported by the Readiness section above the
-mapping; the publish is refused by slot name. A slot whose variable carries the
-**wrong unit** is refused at both the mapping and the planner. Neither refusal
+mapping; the publish is refused by slot name. Each slot is read in the unit its
+parameter publishes, converted from the variable's **source unit** by core
+(kelvin is read as celsius); a variable whose source unit **cannot be converted**
+to it is refused at the mapping, in Readiness and at the planner. Neither refusal
 can catch the confusion that matters: dew point mapped into the air-temperature
 slot is celsius into celsius, and every layer downstream agrees.
 
@@ -119,8 +121,8 @@ arrive, the mapping page **offers** the match instead: it names the blank rows a
 same-named variable could fill, and *Fill these rows and save* applies it. That is
 an ordinary save — the unit refusal, the warnings and the acknowledgement all
 apply, and the generation rises once per row it filled. A filled row is never
-offered, whatever its slug; neither is a match in the wrong unit, which the save
-would only refuse; and the offer is absent when it would fill nothing.
+offered, whatever its slug; neither is a match whose unit cannot be converted,
+which the save would only refuse; and the offer is absent when it would fill nothing.
 
 Changing a mapping **raises the generation and marks the publication stale**, so
 the next publish outranks the last and the sweep picks it up within five minutes

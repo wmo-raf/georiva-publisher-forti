@@ -2,8 +2,8 @@
 
 The publisher's whole job is turning rasters into bytes, so a test that fakes the
 raster tests the half that was never in doubt. These write real GeoTIFFs into a
-temporary directory and point ``reader.asset_url`` at them, which is the one seam
-between this plugin and object storage.
+temporary directory that stands in for core's assets bucket
+(:mod:`.assets_on_disk`), which is where core's read module reads them from.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -92,6 +92,9 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
             slug=variable_slug,
             name=variable_slug,
             unit=unit,
+            # What the COGs below hold: the factory writes values in the slot's
+            # own unit, so source and served unit are the same (ADR 0046 §1).
+            source_unit=unit,
             value_min=-100,
             value_max=2000,
         )
@@ -156,12 +159,14 @@ def make_run(collection, reference_time=REFERENCE_TIME, closed=True):
     return run
 
 
-def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=()):
+def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFERENCE_TIME, skip=(), constants=None):
     """One GeoTIFF per variable per step, and the Items and Assets naming them.
 
     ``skip`` names variables to leave out of the *last* step, which is how a real
-    run looks while its stragglers are still ingesting.
+    run looks while its stragglers are still ingesting. ``constants`` replaces
+    the value written for a variable — one stored in another unit, say.
     """
+    constants = {**CONSTANTS, **(constants or {})}
     variables = {variable.slug: variable for variable in collection.variables.all()}
     hrefs = {}
 
@@ -177,7 +182,7 @@ def write_cogs(collection, directory, step_hours=3, steps=9, reference_time=REFE
             if slug in skip and step == steps - 1:
                 continue
 
-            value = step * 0.5 if slug == "tp" else CONSTANTS[slug]
+            value = step * 0.5 if slug == "tp" else constants[slug]
             href = f"{slug}/{step:02d}.tif"
             path = directory / href
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,3 +226,12 @@ def _write_tif(path, value):
         transform=TRANSFORM,
     ) as destination:
         destination.write(data, 1)
+
+
+def restate_source_unit(variable, symbol, water=False):
+    """Say ``variable``'s bytes hold ``symbol`` — as a queryset update, the way
+    core's Correct source unit action would, since the source unit is locked
+    once the Variable has assets (ADR 0046 §8). Returns the reloaded row."""
+    unit, _ = Unit.objects.get_or_create(symbol=symbol, defaults={"name": symbol})
+    Variable.objects.filter(pk=variable.pk).update(source_unit=unit, water=water)
+    return Variable.objects.get(pk=variable.pk)

@@ -36,8 +36,8 @@ from georiva.core.models import Collection, visible_visibilities
 from georiva.events.models import DomainEvent
 
 from . import parameters as params
+from . import units
 from .mapping import auto_match
-from .units import same_unit, symbol_of
 
 #: How many generations fit beneath one run revision — the place value the
 #: generation occupies in the published version, and therefore also the first
@@ -641,7 +641,10 @@ class FortiPublication(BuildDisciplinedModel):
         change: downstream code asks for "whatever fills 2t here" and no longer
         assumes the answer is called ``2t``.
         """
-        rows = {row.slot: row.variable for row in self.variable_mappings.select_related("variable", "variable__unit")}
+        rows = {
+            row.slot: row.variable
+            for row in self.variable_mappings.select_related("variable", "variable__unit", "variable__source_unit")
+        }
         return {key: rows.get(key) for key in params.SLOT_KEYS}
 
     def unmapped_slots(self, mapped: dict | None = None) -> list[str]:
@@ -803,22 +806,22 @@ class FortiVariableMapping(models.Model):
                 f"{self.variable.slug!r} belongs to a different collection. Only variables of "
                 f"this publication's own collection can be used."
             )
-        elif not self._unit_agrees():
-            # Forti copies units out of ``meta.json`` without converting them,
-            # so a disagreement publishes a number wrong by a constant under a
-            # label that looks right. The refusal names what would carry it.
+        else:
+            # Each slot is read in the unit its parameter publishes, converted
+            # from what the variable's bytes hold. A source unit that cannot be
+            # converted would leave the slot with nothing right to publish, so
+            # the refusal names what would carry it.
             slot = params.BY_SLOT[self.slot]
-            have = symbol_of(self.variable)
-            errors["variable"] = (
-                f"{self.variable.slug!r} is in {have}, but {self.slot} must be in {slot.units}. "
-                f"Units are not converted, so {', '.join(slot.feeds)} would show wrong numbers."
-            )
+            reason = units.refusal(self.variable, slot.units)
+            if reason is not None:
+                errors["variable"] = (
+                    f"{self.variable.slug!r} is stored in {units.source_symbol(self.variable)}, which cannot be "
+                    f"read as {slot.units}, the unit {self.slot} publishes: {reason} "
+                    f"{', '.join(slot.feeds)} cannot be published from it."
+                )
 
         if errors:
             raise ValidationError(errors)
-
-    def _unit_agrees(self) -> bool:
-        return same_unit(symbol_of(self.variable), params.BY_SLOT[self.slot].units)
 
     def save(self, *args, **kwargs):
         """Save the row, and tell the publication only if its bytes have moved.

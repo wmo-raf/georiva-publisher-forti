@@ -38,9 +38,9 @@ from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
 from . import parameters as params
+from . import units
 from .models import GENERATIONS_PER_REVISION
 from .prose import stamp
-from .units import same_unit, symbol_of
 from .windows import publishable
 
 #: Why a collection nobody may read anonymously is not published, said once for
@@ -75,8 +75,8 @@ class PublishPlan:
     generation: int
     times: list
     parameters: list
-    hrefs: dict = field(default_factory=dict)
-    """``{slot key: [href per step, in ``times`` order]}``."""
+    assets: dict = field(default_factory=dict)
+    """``{slot key: [Asset per step, in ``times`` order]}``."""
 
     mapping: dict = field(default_factory=dict)
     """``{slot key: variable id}`` — which variable was resolved into each slot."""
@@ -151,8 +151,8 @@ def plan(publication) -> PublishPlan:
 
     by_slot = _resolve_slots(publication)
 
-    hrefs_by_slot = cog_hrefs(collection, run.reference_time, by_slot)
-    times = shared_times(hrefs_by_slot)
+    assets_by_slot = cog_assets(collection, run.reference_time, by_slot)
+    times = shared_times(assets_by_slot)
     if not times:
         raise NothingToPublish(
             f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has a COG "
@@ -176,7 +176,7 @@ def plan(publication) -> PublishPlan:
         generation=_generation_for(publication, run),
         times=times,
         parameters=chosen,
-        hrefs={slot: [hrefs_by_slot[slot][time] for time in times] for slot in hrefs_by_slot},
+        assets={slot: [assets_by_slot[slot][time] for time in times] for slot in assets_by_slot},
         mapping={slot: variable.pk for slot, variable in by_slot.items()},
         time_until_next=_time_until_next(publication, collection, run),
     )
@@ -225,6 +225,12 @@ def _generation_for(publication, run) -> int:
 def readable_without_credentials(collection) -> bool:
     """Whether a reader presenting nothing may be served this collection.
 
+    The reader is Forti's — ``rawdataforecaster`` and ``jsonfrontend`` serve
+    what is published to anybody who can reach them — not the publisher's own
+    read of the COGs, which goes through core's read module with the worker's
+    credentials. So the rule stands now that the publisher no longer reads a
+    public-read bucket by URL: it is about who sees the output.
+
     A predicate rather than only a refusal, because :mod:`~.readiness` asks the
     same question before a publish and has to get the same answer: a rule stated
     twice is one that disagrees with itself the first time either copy is edited.
@@ -254,10 +260,11 @@ def _resolve_slots(publication) -> dict:
     a configuration that is not finished — legal to save, impossible to publish.
     A variable from **another collection** would have no asset at any timestep,
     and refusing here says so instead of letting the step intersection come back
-    empty and blame the run. And a **wrong unit** is the one that publishes
-    successfully: Forti copies units out of ``meta.json`` without interpreting
-    them, so a slot filled from a variable in kelvin publishes a number wrong by
-    273 under a label that says celsius, and every layer downstream agrees.
+    empty and blame the run. And a **unit that cannot be converted**: every slot
+    is read in the unit its parameter publishes — Forti copies the label out of
+    ``meta.json`` without interpreting it — converted on read from the
+    variable's source unit (ADR 0046 §11). Kelvin is read as celsius; a
+    pressure cannot be, and is refused here rather than at the read.
 
     The last two are checked at the mapping too, and deliberately twice: that
     check is what a form can show, and this one is what holds when nothing went
@@ -290,22 +297,24 @@ def _resolve_slots(publication) -> dict:
     wrong = []
     for key, variable in by_slot.items():
         want = params.BY_SLOT[key].units
-        have = symbol_of(variable)
-        if not same_unit(have, want):
-            wrong.append(f"{key} ← {variable.slug} is {have!r}, expected {want!r}")
+        reason = units.refusal(variable, want)
+        if reason is not None:
+            wrong.append(
+                f"{key} ← {variable.slug} is stored in {units.source_symbol(variable)!r}, "
+                f"which cannot be read in {want!r} ({reason})"
+            )
     if wrong:
         raise PublicationRefused(
-            "Units do not match what the parameter map publishes: "
+            "Each slot is read in the unit its parameter publishes, and these cannot be: "
             + "; ".join(wrong)
-            + ". Forti reads units from meta.json without converting, so this would "
-            "publish a wrong number under a right-looking label."
+            + ". Map a variable whose values can be converted to that unit."
         )
 
     return by_slot
 
 
-def cog_hrefs(collection, reference_time, by_slot) -> dict:
-    """``{slot key: {time: href}}`` for one run's COG assets.
+def cog_assets(collection, reference_time, by_slot) -> dict:
+    """``{slot key: {time: Asset}}`` for one run's COG assets.
 
     Public because :mod:`~.readiness` asks the same question ahead of a publish
     rather than during one, and the step count it reports has to be the count
@@ -313,27 +322,32 @@ def cog_hrefs(collection, reference_time, by_slot) -> dict:
     arrangement in which the form promises a number the build then disagrees
     with.
 
+    The rows, not their hrefs: core's read module reads an asset by its row —
+    wherever its bytes are, and in the unit asked of its Variable (ADR 0046 §10).
+    COGs only, for now; a Store asset (ADR 0044) is read the same way, but a
+    store harvest's steps are not yet planned here.
+
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
     an instance that derives dew point and temperature from one field, say — in
-    which case its hrefs belong to both.
+    which case its assets belong to both.
     """
     assets = Asset.objects.filter(
         item__collection=collection,
         item__reference_time=reference_time,
         variable__in=set(by_slot.values()),
         format=Asset.Format.COG,
-    ).values_list("variable_id", "item__time", "href")
+    ).select_related("item")
 
     slots_by_variable = {}
     for slot, variable in by_slot.items():
         slots_by_variable.setdefault(variable.pk, []).append(slot)
 
-    hrefs = {slot: {} for slot in by_slot}
-    for variable_id, time, href in assets:
-        for slot in slots_by_variable[variable_id]:
-            hrefs[slot][time] = href
-    return hrefs
+    found = {slot: {} for slot in by_slot}
+    for asset in assets:
+        for slot in slots_by_variable[asset.variable_id]:
+            found[slot][asset.item.time] = asset
+    return found
 
 
 def spans_a_period(parameters) -> bool:
@@ -347,11 +361,11 @@ def spans_a_period(parameters) -> bool:
     return any(parameter.is_period for parameter in parameters)
 
 
-def shared_times(hrefs_by_slot) -> list:
+def shared_times(assets_by_slot) -> list:
     """The timesteps every slot has, in order."""
-    if not hrefs_by_slot:
+    if not assets_by_slot:
         return []
-    shared = set.intersection(*(set(times) for times in hrefs_by_slot.values()))
+    shared = set.intersection(*(set(times) for times in assets_by_slot.values()))
     return sorted(shared)
 
 

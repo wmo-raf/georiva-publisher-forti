@@ -17,7 +17,8 @@ the known leak in `dataset.go:123` — ``index.Free`` exists and is correct, but
 run leaks an index every run.
 
 So the grid is a function of the publication's own bbox and the collection's
-raster geometry, and the identifier is pinned on the publication the first time it
+raster geometry — the window core's read module returns for that bbox
+(:mod:`.reader`) — and the identifier is pinned on the publication the first time it
 is built. A later build that produces a different identifier is refused rather
 than published: it means the source geometry moved, which is a thing to find out
 about rather than to leak over.
@@ -86,42 +87,3 @@ def from_raster_window(transform, rows: int, cols: int, row_offset: int, col_off
     longitude_grid = np.tile(longitude, rows)
 
     return Grid(latitude=latitude_grid, longitude=longitude_grid, rows=rows, cols=cols)
-
-
-def window_for_bbox(transform, width: int, height: int, bbox) -> tuple[int, int, int, int]:
-    """The pixel window covering ``bbox``, as ``(row_offset, col_offset, rows, cols)``.
-
-    ``bbox`` is ``(west, south, east, north)``. The window is inclusive of every
-    pixel whose centre falls inside the box, and clipped to the raster — a bbox
-    reaching past the antimeridian or the poles yields the part that exists
-    rather than an error, because an area near the edge of a regional model is an
-    ordinary thing to configure.
-
-    Raises when the box and the raster do not overlap at all: that is a
-    misconfiguration, and publishing zero points would produce an area every
-    coordinate on Earth resolves to nothing in.
-    """
-    west, south, east, north = bbox
-    if west >= east or south >= north:
-        raise ValueError(f"bbox must be (west, south, east, north) with west<east and south<north, got {bbox}")
-
-    pixel_width, _, origin_x, _, pixel_height, origin_y = transform[:6]
-
-    # pixel_height is negative for a north-up raster, which every COG here is.
-    col_start = int(np.floor((west - origin_x) / pixel_width))
-    col_end = int(np.ceil((east - origin_x) / pixel_width))
-    row_start = int(np.floor((north - origin_y) / pixel_height))
-    row_end = int(np.ceil((south - origin_y) / pixel_height))
-
-    col_offset = max(0, col_start)
-    row_offset = max(0, row_start)
-    cols = min(width, col_end) - col_offset
-    rows = min(height, row_end) - row_offset
-
-    if rows <= 0 or cols <= 0:
-        raise ValueError(
-            f"bbox {bbox} does not overlap the raster ({width}x{height} from "
-            f"{origin_x}, {origin_y}). An area with no points resolves nothing."
-        )
-
-    return row_offset, col_offset, rows, cols

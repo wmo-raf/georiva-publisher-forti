@@ -26,7 +26,7 @@ from georiva_publisher_forti import parameters as params
 from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns, fillable
 from georiva_publisher_forti.models import FortiPublication, FortiVariableMapping
 
-from .factories import make_collection, make_publication
+from .factories import make_collection, make_publication, restate_source_unit
 
 
 class Named:
@@ -156,13 +156,22 @@ class FillableTests(SimpleTestCase):
         self.assertEqual(list(offered), list(params.SLOT_KEYS))
 
 
-class Declared(Named):
-    """A variable as :func:`concerns` reads one: a name and a declared range."""
+class Symbol:
+    def __init__(self, symbol):
+        self.symbol = symbol
 
-    def __init__(self, slug, value_min=-100.0, value_max=2000.0):
+
+class Declared(Named):
+    """A variable as :func:`concerns` reads one: a name, a declared range, and
+    the unit that range is in — its source unit (ADR 0046 §3). By default the
+    unit of the slot its slug names."""
+
+    def __init__(self, slug, value_min=-100.0, value_max=2000.0, source_unit=None):
         super().__init__(slug)
         self.value_min = value_min
         self.value_max = value_max
+        self.source_unit = Symbol(source_unit or params.BY_SLOT[slug].units)
+        self.water = False
 
 
 def mapping(**filled):
@@ -226,6 +235,13 @@ class ConcernTests(SimpleTestCase):
 
         self.assertEqual([concern.slot for concern in raised], ["2t"])
         self.assertEqual(raised[0].kind, RANGE)
+
+    def test_a_range_is_compared_in_the_slot_s_unit(self):
+        """A range is stored in the source unit (ADR 0046 §3) and the values are
+        read converted, so 220–320 K is −53–47 °C: nothing to warn about."""
+        raised = concerns(mapping(**{"2t": Declared("2t", value_min=220.0, value_max=320.0, source_unit="K")}))
+
+        self.assertEqual(raised, ())
 
     def test_a_range_warning_states_both_ranges(self):
         (concern,) = concerns(mapping(**{"2t": Declared("2t", value_min=200.0, value_max=320.0)}))
@@ -358,18 +374,51 @@ class MappingConstraintTests(TestCase):
 
         self.assertIn("variable", ctx.exception.error_dict)
 
-    def test_a_unit_that_disagrees_with_the_slot_cannot_be_saved(self):
-        kelvin, _ = Unit.objects.get_or_create(name="Kelvin", defaults={"symbol": "K"})
-        variable = self.collection.variables.get(slug="2d")
-        variable.unit = kelvin
-        variable.save(update_fields=["unit"])
+    def test_a_source_unit_that_cannot_reach_the_slot_is_refused(self):
+        """Pressure cannot be read as a temperature, whatever it is served as."""
+        variable = restate_source_unit(self.collection.variables.get(slug="2d"), "hPa")
         row = self.publication.variable_mappings.get(slot="2t")
         row.variable = variable
 
         with self.assertRaises(ValidationError) as ctx:
             row.full_clean()
 
-        self.assertIn("variable", ctx.exception.error_dict)
+        (message,) = ctx.exception.error_dict["variable"][0].messages
+        self.assertIn("hPa", message)
+        self.assertIn("degC", message)
+        self.assertIn("air_temperature_2m", message)
+
+    def test_a_source_unit_the_read_converts_is_accepted(self):
+        """Kelvin bytes are read in degC (ADR 0046 §11): the slot takes them."""
+        variable = restate_source_unit(self.collection.variables.get(slug="2d"), "K")
+        row = self.publication.variable_mappings.get(slot="2t")
+        row.variable = variable
+
+        row.full_clean()
+
+    def test_the_served_unit_does_not_decide(self):
+        """The bytes are read from the source unit, so a Variable served in
+        kelvin over degC bytes fills a degC slot like any other."""
+        kelvin, _ = Unit.objects.get_or_create(symbol="K", defaults={"name": "Kelvin"})
+        variable = self.collection.variables.get(slug="2d")
+        variable.unit = kelvin
+        variable.save(update_fields=["unit"])
+        row = self.publication.variable_mappings.get(slot="2t")
+        row.variable = variable
+
+        row.full_clean()
+
+    def test_a_mass_per_area_fills_the_millimetre_slot_only_as_water(self):
+        """``kg m-2`` is millimetres of water and of nothing else (ADR 0046 §6)."""
+        row = self.publication.variable_mappings.get(slot="tp")
+        row.variable = restate_source_unit(self.collection.variables.get(slug="tp"), "kg m-2")
+
+        with self.assertRaises(ValidationError) as ctx:
+            row.full_clean()
+        self.assertIn("water", str(ctx.exception))
+
+        row.variable = restate_source_unit(row.variable, "kg m-2", water=True)
+        row.full_clean()
 
     def test_a_blank_slot_saves(self):
         row = self.publication.variable_mappings.get(slot="2t")

@@ -1,45 +1,46 @@
-"""Whether two unit symbols name the same unit — the check Forti cannot make.
+"""Whether a variable's values can be read in a slot's unit — the check Forti cannot make.
 
 ``jsonfrontend`` copies units out of ``meta.json`` (`encode.go:88`) without
 interpreting them, so nothing downstream of this plugin can tell a celsius value
-from a kelvin one labelled celsius. The check has to happen here or nowhere, and
-it is a **hard refusal** in both places it is made: at the mapping, where a slot
-is given a variable, and at the planner, just before anything is read.
+from a kelvin one labelled celsius. So every slot is read in the unit its
+parameter publishes: core's read module converts each value from its Variable's
+**source unit** — what the bytes hold (ADR 0046 §1, §11) — whatever unit the
+Variable is served in.
+
+A source unit core cannot convert to the slot's unit is a **hard refusal**,
+made in three places from this one rule: at the mapping, where a slot is given a
+variable; in readiness, before a publish; and at the planner, just before
+anything is read.
 """
 
+from georiva.core.unit_utils import Conversion, ConversionRefused, affine_conversion
 
-def same_unit(symbol: str | None, expected: str) -> bool:
-    """Whether two symbols name the same unit, not merely a compatible one.
 
-    Compared through pint rather than as strings: an instance may spell degrees
-    Celsius ``°C`` or ``degC`` depending on which seed wrote the row, and both
-    are the same unit. Kelvin is *compatible* with Celsius and is not the same
-    unit — which is the whole point of checking, since Forti converts nothing.
+def conversion_into(variable, unit: str) -> Conversion:
+    """How ``variable``'s stored values become values in ``unit``: core's own
+    rule (ADR 0046 §4, §6), the one the read applies.
 
-    A symbol pint cannot parse falls back to an exact string match. That is
-    stricter than necessary and refuses rather than guesses, which is the right
-    way round when the alternative is publishing a wrong number.
+    Raises :class:`ConversionRefused`, with an operator-readable reason, when
+    they cannot — another dimension, a non-affine unit, a mass per area that is
+    not flagged as water. A variable with no source unit is refused too: core
+    requires one, but what its bytes hold cannot be guessed.
     """
-    if symbol is None:
-        return False
-    if symbol == expected:
-        return True
+    source = getattr(variable, "source_unit", None)
+    if source is None:
+        raise ConversionRefused(f"{variable.slug!r} does not state what unit its values are stored in.")
+    return affine_conversion(source.symbol, unit, water=bool(getattr(variable, "water", False)))
 
-    from georiva.core.models.units import ureg
 
+def refusal(variable, unit: str) -> str | None:
+    """Why ``variable``'s values cannot be read in ``unit``, or ``None`` when they can."""
     try:
-        return str(ureg(symbol).u) == str(ureg(expected).u)
-    except Exception:
-        return False
+        conversion_into(variable, unit)
+    except ConversionRefused as refused:
+        return str(refused)
+    return None
 
 
-def symbol_of(variable) -> str | None:
-    """The unit symbol a variable carries, or ``None``.
-
-    Core declares ``Variable.unit`` non-nullable, so the guard is defensive
-    rather than expected — and it is here once rather than at each of the three
-    sites that compare a variable against a slot, none of which wants to be the
-    place that decided what a variable with no unit means.
-    """
-    unit = variable.unit if variable else None
-    return unit.symbol if unit else None
+def source_symbol(variable) -> str | None:
+    """The unit ``variable``'s values are stored in, as a symbol, or ``None``."""
+    source = getattr(variable, "source_unit", None)
+    return source.symbol if source else None

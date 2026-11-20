@@ -7,7 +7,27 @@ target-version = "py312"
 extend-exclude = ["**/migrations/**"]
 
 [lint]
-select = ["E", "W", "F", "I", "UP", "B"]
+select = ["E", "W", "F", "I", "UP", "B", "TID251"]
 
 [lint.isort]
 known-first-party = ["georiva", "georiva_publisher_forti"]
+
+# Values are read through GeoRiva core's read module, never by opening raster
+# bytes here (core ADR 0046 §19-20): `from georiva.core import values`, then
+# `with values.session() as s:` and `s.window(asset, bbox, in_unit=...)`. This
+# plugin publishes to an outside contract, so it passes `in_unit` on every read.
+#
+# Ruff cannot see a call on an object, so reading a GeoRiva bucket's
+# `read_bytes(key)` is banned by review rather than by this rule.
+[lint.flake8-tidy-imports.banned-api]
+"rasterio.open".msg = "Read values through georiva.core.values (ADR 0046), not rasterio.open."
+"xarray.open_dataset".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_dataset."
+"xarray.open_dataarray".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_dataarray."
+"xarray.open_mfdataset".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_mfdataset."
+"xarray.open_zarr".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_zarr."
+"xarray.open_datatree".msg = "Read values through georiva.core.values (ADR 0046), not xarray.open_datatree."
+"rioxarray.open_rasterio".msg = "Read values through georiva.core.values (ADR 0046), not rioxarray.open_rasterio."
+
+[lint.per-file-ignores]
+# Tests write the COGs they then read through core: fixture bytes, not values.
+"src/georiva_publisher_forti/tests/**" = ["TID251"]

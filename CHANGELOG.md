@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Values are read through core, converted to each parameter's unit
+
+The publisher reads every input through core's read module
+(`georiva.core.values`, core ADR 0046): one reading session per publish, each
+slot read as a windowed range read over the publication's bbox, in the unit its
+Forti parameter publishes. The point list is built from the window core returns.
+
+**Units are converted, not refused.** A slot used to be refused unless its
+variable's unit was the slot's. It now accepts any variable whose **source
+unit** core can convert to the slot's unit — a temperature stored in kelvin is
+published in degrees Celsius — and refuses, with core's reason, one it cannot
+(another dimension, `kg m-2` into `mm` for a variable not flagged as water). The
+served unit plays no part. The Readiness row is now "Units convert", and the
+declared-range warning compares the range converted into the slot's unit.
+
+A raster not in EPSG:4326 is refused at the read: Forti's points are longitude
+and latitude.
+
+**Needs a core with `georiva.core.values`** (ADR 0046, core `main` after
+v0.4.0-586).
+
 ## 0.3.0
 
 ### A model's forecast, told for its towns

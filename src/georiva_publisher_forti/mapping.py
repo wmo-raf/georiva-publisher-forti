@@ -16,8 +16,8 @@ degrees celsius into degrees celsius, every layer downstream agrees, and no
 machine check will ever catch it. A surface that renders these without saying so
 has told an operator their mapping was verified. It was not.
 
-Kept in a module of its own, pure, and importing nothing from Django, because a
-data migration imports it. A migration that reached into ``models`` would
+Kept in a module of its own, pure, and importing no models — only core's unit
+rule, which is pint — because a data migration imports it. A migration that reached into ``models`` would
 rewrite its own history the next time a model changed; one that duplicated the
 rule would describe the bytes a publication is serving using a rule that is no
 longer the one that produced them. :func:`concerns` is written to the same
@@ -28,7 +28,10 @@ tested without one.
 
 from dataclasses import dataclass
 
+from georiva.core.unit_utils import ConversionRefused
+
 from . import parameters as params
+from . import units
 from .prose import listed
 
 #: A variable that also fills another slot. The same series is then published
@@ -147,18 +150,38 @@ def _range_is_unreachable(slot, variable) -> bool:
     variable holds, the slot cannot publish it.
     """
     low, high = slot.plausible
+    declared = _declared_in(slot, variable)
+    if declared is None:
+        return False
+    declared_low, declared_high = declared
+    return declared_high < low or declared_low > high
+
+
+def _declared_in(slot, variable) -> tuple[float, float] | None:
+    """The variable's declared range in the slot's unit, or ``None``.
+
+    Stored in the source unit, like every number about values (ADR 0046 §3), and
+    read converted into the slot's — the same conversion the publish applies.
+    ``None`` when there is no range, or when the unit cannot be converted at
+    all, which is the unit refusal's to say and not this warning's.
+    """
     declared_low = getattr(variable, "value_min", None)
     declared_high = getattr(variable, "value_max", None)
     if declared_low is None or declared_high is None:
-        return False
-    return declared_high < low or declared_low > high
+        return None
+    try:
+        conversion = units.conversion_into(variable, slot.units)
+    except ConversionRefused:
+        return None
+    return conversion.forward(declared_low), conversion.forward(declared_high)
 
 
 def _range_message(slot, variable) -> str:
     low, high = slot.plausible
+    declared_low, declared_high = _declared_in(slot, variable)
     return (
-        f"{variable.slug!r} has a value range of {_number(variable.value_min)} to "
-        f"{_number(variable.value_max)}, but {slot.key} is normally {_number(low)} to "
+        f"{variable.slug!r} has a value range of {_number(declared_low)} to "
+        f"{_number(declared_high)} {slot.units}, but {slot.key} is normally {_number(low)} to "
         f"{_number(high)} {slot.units}. The numbers may be in a different unit than the label says."
     )
 
