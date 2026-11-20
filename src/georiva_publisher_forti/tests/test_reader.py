@@ -145,6 +145,24 @@ class OrdinalTests(ReaderTestCase):
 
         self.assertIn("different raster geometry", str(ctx.exception))
 
+    def test_a_box_reaching_past_the_raster_is_clipped_not_refused(self):
+        """An area at the edge of a regional model is ordinary configuration."""
+        variable = self.variable("2t-edge", "degC", "degC")
+        asset = self.cog(variable, "00", positions(40, 40), from_origin(30.0, 10.0, 0.25, 0.25))
+
+        with values.session() as session:
+            grid = WindowReader(session, (29.0, 9.0, 30.5, 11.0)).resolve(asset)
+
+        self.assertEqual((grid.rows, grid.cols), (4, 2))
+        self.assertEqual((float(grid.latitude[0]), float(grid.longitude[0])), (9.875, 30.125))
+
+    def test_a_backwards_box_is_refused(self):
+        variable = self.variable("2t-edge", "degC", "degC")
+        asset = self.cog(variable, "00", positions(40, 40), from_origin(30.0, 10.0, 0.25, 0.25))
+
+        with values.session() as session, self.assertRaises(ValueError):
+            WindowReader(session, (33.25, 4.0, 32.0, 5.25)).resolve(asset)
+
     def test_a_box_that_misses_the_raster_is_refused(self):
         variable = self.variable("2t-global", "degC", "degC")
         asset = self.cog(variable, "00", positions(40, 40), from_origin(0.0, 10.0, 0.25, 0.25))
