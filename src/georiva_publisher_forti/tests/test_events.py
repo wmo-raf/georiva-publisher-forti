@@ -258,9 +258,12 @@ class TimelineTests(ChainTestCase):
 
         response = self.client.get(reverse("events_timeline", args=[closed.correlation_id]))
 
-        rows = {row["label"]: row for row in response.context["rows"]}
-        self.assertIn(PublicationWritten.label, rows)
-        self.assertEqual(rows[PublicationWritten.label]["cause"], f"{closed.label}: {closed.summary()}")
+        # The Timeline draws a chain as a rail along caused_by (core's ADR 0030).
+        written = [
+            row.entry for row in response.context["layout"].rows if row.entry.event_type == PublicationWritten._meta.label_lower
+        ]
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0].caused_by_id, closed.pk)
 
     def test_another_organisation_does_not_see_it(self):
         closed = self.publish_from_a_close()
