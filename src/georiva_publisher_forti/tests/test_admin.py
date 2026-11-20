@@ -290,6 +290,7 @@ class UnitRefusalTests(MappingEditorMixin, TestCase):
             slug="t2m-kelvin",
             name="t2m-kelvin",
             unit=kelvin,
+            source_unit=kelvin,
             value_min=-100,
             value_max=2000,
         )
@@ -375,6 +376,7 @@ class WarningTests(MappingEditorMixin, TestCase):
             slug="t2m-restated",
             name="t2m-restated",
             unit=self.variable("2t").unit,
+            source_unit=self.variable("2t").unit,
             value_min=200.0,
             value_max=320.0,
         )
@@ -518,6 +520,7 @@ class MatchOfferTests(MappingEditorMixin, TestCase):
             slug=slug,
             name=slug,
             unit=self.variable(like).unit,
+            source_unit=self.variable(like).unit,
             value_min=-100,
             value_max=2000,
         )

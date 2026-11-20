@@ -527,6 +527,7 @@ def _renamed_copy_of(collection, source: str, slug: str, unit=None):
         slug=slug,
         name=slug,
         unit=unit or original.unit,
+        source_unit=unit or original.unit,
         value_min=original.value_min,
         value_max=original.value_max,
     )

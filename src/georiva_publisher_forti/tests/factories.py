@@ -92,6 +92,9 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
             slug=variable_slug,
             name=variable_slug,
             unit=unit,
+            # What the COGs below hold: the factory writes values in the slot's
+            # own unit, so source and served unit are the same (ADR 0046 §1).
+            source_unit=unit,
             value_min=-100,
             value_max=2000,
         )
