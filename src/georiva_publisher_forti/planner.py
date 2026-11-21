@@ -42,6 +42,7 @@ from . import parameters as params
 from . import units
 from .models import GENERATIONS_PER_REVISION
 from .prose import stamp
+from .reader import ZERO
 from .windows import publishable
 
 #: Why a collection nobody may read anonymously is not published, said once for
@@ -51,6 +52,11 @@ from .windows import publishable
 NOT_PUBLIC = (
     "{slug} is {visibility}. Only public collections can be published to Forti — change the collection's visibility."
 )
+
+#: Slots accumulated from the run's start, so zero at the run's reference time
+#: by definition. A store holds no step there (AIFS), and without one the first
+#: window — and the weather symbols built on it — would never be published.
+ACCUMULATED_FROM_RUN_START = ("tp",)
 
 
 class NothingToPublish(Exception):
@@ -93,6 +99,12 @@ class PublishPlan:
         stored ``published_version`` — reads this one expression.
         """
         return self.run_version * GENERATIONS_PER_REVISION + self.generation
+
+    @property
+    def geometry_asset(self):
+        """An asset of the run to fix the window from — never a supplied zero,
+        which has no geometry of its own."""
+        return next(asset for assets in self.assets.values() for asset in assets if asset is not ZERO)
 
     @property
     def step_count(self) -> int:
@@ -335,6 +347,14 @@ def readable_assets(collection, reference_time, by_slot) -> dict:
     arrangement in which the form promises a number the build then disagrees
     with.
 
+    A slot accumulated from the run's start with no asset at the reference
+    time gets :data:`~.reader.ZERO` there, which is what it holds by
+    definition. Here, so the step set readiness counts includes it exactly as
+    the build's does; at the reference time only, so a step missing anywhere
+    else stays missing and is never read as zero rain. An asset that is there
+    is read as provided. The zero then takes part in the intersection like any
+    other step: an instant slot lacking the reference time still drops it.
+
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
     an instance that derives dew point and temperature from one field, say — in
@@ -356,6 +376,10 @@ def readable_assets(collection, reference_time, by_slot) -> dict:
     for asset in assets:
         for slot in slots_by_variable[asset.variable_id]:
             found[slot][asset.item.time] = asset
+
+    for slot in ACCUMULATED_FROM_RUN_START:
+        if slot in found:
+            found[slot].setdefault(reference_time, ZERO)
     return found
 
 

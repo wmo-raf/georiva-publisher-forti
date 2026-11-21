@@ -15,7 +15,7 @@ actually stage first.
 """
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
@@ -821,3 +821,147 @@ class StoreRunSignalTests(StorePublishTestCase):
 
         self.assertEqual(self.reread().status, FortiPublication.Status.STALE)
         self.assertEqual(dispatched, [])
+
+
+class PrecipitationStoreTestCase(StorePublishTestCase):
+    """A store whose precipitation and temperature hold only the steps a test says."""
+
+    #: Precipitation steps the store does not hold, by step index. Accumulated
+    #: from the run's start, a store holds no step there (AIFS).
+    precipitation_not_held = (0,)
+    #: Temperature steps the store does not hold, by step index.
+    temperature_not_held = ()
+    #: What precipitation starts from, and accumulates per step, in kg m⁻².
+    offset = 0.0
+    per_step = 1.5
+
+    def store_arrays(self):
+        shape = (4, 8)
+        arrays = [
+            StoreArray(
+                path,
+                values=_constant(value, shape),
+                held=(lambda run, step: step not in self.temperature_not_held) if path == "temperature_2m" else None,
+            )
+            for path, value in STORE_CONSTANTS.items()
+        ]
+        arrays.append(
+            StoreArray(
+                "precipitation_surface",
+                values=lambda run, step: np.full(shape, self.offset + step * self.per_step, dtype=np.float32),
+                held=lambda run, step: step not in self.precipitation_not_held,
+            )
+        )
+        return arrays
+
+    def leads(self, times):
+        return [time - self.reference_time for time in times]
+
+    def window_ends(self, parameter):
+        """The leads a published period series ends at."""
+        meta, _values = self.published()
+        return self.leads(datetime.fromisoformat(time) for time in meta["parameters"][parameter]["times"])
+
+    def steps_finding(self):
+        return next(finding for finding in readiness.report(self.reread()).findings if finding.key == "steps")
+
+
+def _hours(*hours):
+    return [timedelta(hours=hour) for hour in hours]
+
+
+class PrecipitationAtRunStartTests(PrecipitationStoreTestCase):
+    """No precipitation step at the run's start: Forti supplies the zero there."""
+
+    def test_the_first_six_hour_window_is_published_and_equals_the_accumulation_at_six_hours(self):
+        self.close_run()
+
+        result = publish(self.publication)
+
+        self.assertEqual(result["steps"], len(STORE_LEADS))
+        self.assertEqual(self.window_ends("precipitation_amount_acc6h"), _hours(6, 12, 18, 24))
+        self.assertAlmostEqual(self.first_value("precipitation_amount_acc6h"), 1.5, places=5)
+
+    def test_the_first_window_s_weather_symbols_are_published(self):
+        self.close_run()
+
+        publish(self.publication)
+
+        self.assertEqual(self.window_ends("weather_symbol_6h"), _hours(6, 12, 18, 24))
+
+    def test_readiness_counts_the_steps_the_build_writes(self):
+        self.close_run()
+
+        steps = self.steps_finding()
+        result = publish(self.reread())
+
+        self.assertEqual(result["steps"], len(STORE_LEADS))
+        self.assertEqual(steps.state, readiness.READY)
+        self.assertEqual(steps.answer, f"{result['steps']} steps")
+
+
+class PrecipitationHeldAtRunStartTests(PrecipitationStoreTestCase):
+    """A source that does hold the run's start is read as provided."""
+
+    precipitation_not_held = ()
+    offset = 0.3
+
+    def test_the_held_step_is_read_not_replaced_by_zero(self):
+        """0.3 at the start and 1.8 at +6 h is a 1.5 window; a zero would make it 1.8."""
+        self.close_run()
+
+        publish(self.publication)
+
+        self.assertAlmostEqual(self.first_value("precipitation_amount_acc6h"), 1.5, places=5)
+
+
+class PrecipitationMissingMidRunTests(PrecipitationStoreTestCase):
+    """Only the run's start is zero: a step missing anywhere else stays missing."""
+
+    precipitation_not_held = (0, 2)
+
+    def test_a_step_missing_after_the_start_is_not_published(self):
+        self.close_run()
+
+        planned = plan(self.reread())
+
+        self.assertEqual(self.leads(planned.times), _hours(0, 6, 18, 24))
+
+    def test_readiness_counts_the_zero_among_the_steps_the_build_writes(self):
+        self.close_run()
+
+        steps = self.steps_finding()
+        result = publish(self.reread())
+
+        self.assertEqual(result["steps"], 4)
+        self.assertEqual(steps.answer, f"4 of {len(STORE_LEADS)}")
+
+
+class InstantSlotMissingRunStartTests(PrecipitationStoreTestCase):
+    """The zero is precipitation's only: an instant slot lacking the run's start
+    still drops the first window through the shared-time intersection."""
+
+    temperature_not_held = (0,)
+
+    def test_the_first_window_is_dropped(self):
+        self.close_run()
+
+        planned = plan(self.reread())
+        publish(self.reread())
+
+        self.assertEqual(self.leads(planned.times), _hours(6, 12, 18, 24))
+        self.assertEqual(self.window_ends("precipitation_amount_acc6h"), _hours(12, 18, 24))
+
+
+class ZeroInTheAccumulationCheckTests(PrecipitationStoreTestCase):
+    """The check that precipitation really accumulates runs over the zero too:
+    this series rises from step to step, but falls from the zero before it."""
+
+    offset = -3.0
+    per_step = 0.1
+
+    def test_a_series_falling_from_the_zero_is_refused(self):
+        self.close_run()
+
+        with self.assertRaisesRegex(ValueError, "not accumulating"):
+            publish(self.publication)

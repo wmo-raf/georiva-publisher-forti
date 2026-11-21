@@ -216,7 +216,7 @@ def _read(publication, publish_plan):
     # interpreting it, so the conversion happens here or nowhere (§20).
     with values.session() as session:
         reader = WindowReader(session, publication.bbox)
-        grid = reader.resolve(next(iter(publish_plan.assets.values()))[0])
+        grid = reader.resolve(publish_plan.geometry_asset)
 
         if publication.grid_id and publication.grid_id != grid.identifier:
             raise GridMoved(

@@ -250,9 +250,10 @@ class ReadinessTests(TestCase):
 
     def test_a_run_no_slot_shares_a_step_with_waits(self):
         """Variables of one run ingest independently, so a run whose slots have
-        landed at disjoint steps is early rather than broken."""
+        landed at disjoint steps is early rather than broken. Not precipitation:
+        it is zero at the run's start whether or not its asset has landed."""
         write_cogs(self.collection, self.path, steps=1)
-        self.collection.variables.get(slug="tp").assets.all().delete()
+        self.collection.variables.get(slug="tcc").assets.all().delete()
         make_run(self.collection)
 
         steps = self.finding(readiness.report(self.publication), "steps")
