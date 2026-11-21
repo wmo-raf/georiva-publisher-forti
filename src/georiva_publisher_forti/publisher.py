@@ -14,6 +14,7 @@ only ``mark_ready`` writes.
 """
 
 import logging
+import time
 
 import numpy as np
 from django.db import transaction
@@ -59,6 +60,7 @@ def publish(publication, facts: dict | None = None) -> dict:
     dies half-way still reports what it had established.
     """
     facts = facts if facts is not None else {}
+    started = time.monotonic()
 
     publish_plan = plan(publication)
     facts["version"] = publish_plan.version
@@ -126,13 +128,14 @@ def publish(publication, facts: dict | None = None) -> dict:
     _refresh_config(publication)
 
     logger.info(
-        "%s: published version %d — %d point(s), %d step(s), %d parameter(s), %d old version(s) pruned",
+        "%s: published version %d — %d point(s), %d step(s), %d parameter(s), %d old version(s) pruned, in %.1f s",
         publication.area_key,
         publish_plan.version,
         grid.point_count,
         publish_plan.step_count,
         len(publish_plan.parameters),
         pruned,
+        time.monotonic() - started,
     )
 
     return {
@@ -261,7 +264,7 @@ def _values_for(parameter, publish_plan, grid, cubes, windows) -> np.ndarray:
         # Mapped through other slots instead — wind as its u and v components —
         # and derived from them here, on the transposed cubes, like the rest.
         recipe, inputs = params.SOURCE_DERIVATIONS[parameter.source]
-        return getattr(derivations, recipe)(*(cubes[key] for key in inputs)).astype(np.float32)
+        return recipe(*(cubes[key] for key in inputs)).astype(np.float32)
 
     if parameter.derivation == "relative_humidity":
         return derivations.relative_humidity(cubes["2t"], cubes["2d"])

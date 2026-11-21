@@ -182,6 +182,13 @@ class EndToEndTests(PublishTestCase):
         self.assertEqual(publication.published_step_count, 9)
         self.assertTrue(publication.grid_id)
 
+    def test_the_log_line_says_how_long_the_build_took(self):
+        with self.assertLogs("georiva_publisher_forti.publisher", level="INFO") as logged:
+            publish(self.publication)
+
+        (line,) = [message for message in logged.output if "published version" in message]
+        self.assertRegex(line, r", in \d+\.\d s$")
+
 
 class MarkerOrderingTests(PublishTestCase):
     def test_no_marker_exists_while_the_bytes_are_still_going_down(self):
