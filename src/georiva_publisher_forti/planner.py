@@ -88,6 +88,9 @@ class PublishPlan:
     mapping: dict = field(default_factory=dict)
     """``{slot key: variable id}`` — which variable was resolved into each slot."""
 
+    geometry_asset: object = None
+    """The asset the read fixes its window from: see :func:`geometry_asset`."""
+
     time_until_next: timedelta | None = None
 
     @property
@@ -99,12 +102,6 @@ class PublishPlan:
         stored ``published_version`` — reads this one expression.
         """
         return self.run_version * GENERATIONS_PER_REVISION + self.generation
-
-    @property
-    def geometry_asset(self):
-        """An asset of the run to fix the window from — never a supplied zero,
-        which has no geometry of its own."""
-        return next(asset for assets in self.assets.values() for asset in assets if asset is not ZERO)
 
     @property
     def step_count(self) -> int:
@@ -181,6 +178,7 @@ def plan(publication) -> PublishPlan:
             f"precipitation and no symbol."
         )
 
+    assets = {slot: [assets_by_slot[slot][time] for time in times] for slot in assets_by_slot}
     return PublishPlan(
         publication=publication,
         run=run,
@@ -189,8 +187,9 @@ def plan(publication) -> PublishPlan:
         generation=_generation_for(publication, run),
         times=times,
         parameters=chosen,
-        assets={slot: [assets_by_slot[slot][time] for time in times] for slot in assets_by_slot},
+        assets=assets,
         mapping={slot: variable.pk for slot, variable in by_slot.items()},
+        geometry_asset=geometry_asset(assets),
         time_until_next=_time_until_next(publication, collection, run),
     )
 
@@ -266,7 +265,7 @@ def _resolve_slots(publication) -> dict:
     mapping is seeded with *is* the old exact-slug match, so a conventionally
     named collection resolves to what it always resolved to; what has changed is
     that a collection naming its variables otherwise can now be published at all,
-    by an operator editing eight rows rather than by renaming variables the rest
+    by an operator editing its rows rather than by renaming variables the rest
     of the instance already uses.
 
     Three refusals, in the order an operator can act on them. A **blank slot** is
@@ -392,6 +391,24 @@ def spans_a_period(parameters) -> bool:
     written on both sides of the refusal.
     """
     return any(parameter.is_period for parameter in parameters)
+
+
+def geometry_asset(assets) -> object:
+    """The asset a publish fixes its window from, out of ``{slot: [asset per step]}``.
+
+    Taken from a slot that is not accumulated from the run's start: only such a
+    slot may hold a supplied :data:`~.reader.ZERO`, which has no geometry, so
+    every step of any other slot is an asset that was read. A publication maps
+    required instant slots, so one is always there; a plan without one is
+    refused here rather than failing inside the read.
+    """
+    for slot, steps in assets.items():
+        if slot not in ACCUMULATED_FROM_RUN_START and steps:
+            return steps[0]
+    raise NothingToPublish(
+        f"{', '.join(assets) or 'Nothing'} is accumulated from the run's start, which leaves "
+        f"no asset to fix the window from. Map a slot read at every step."
+    )
 
 
 def shared_times(assets_by_slot) -> list:

@@ -18,11 +18,12 @@ from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from georiva.core.models import Asset, Collection, Unit, Variable
 from georiva_publisher_forti.models import GENERATIONS_PER_REVISION, FortiPublication
-from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
+from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, geometry_asset, plan
+from georiva_publisher_forti.reader import ZERO
 
 from .factories import (
     REFERENCE_TIME,
@@ -592,3 +593,17 @@ def _renamed_copy_of(collection, source: str, slug: str, unit=None):
     for asset in Asset.objects.filter(item__collection=collection, variable=original):
         Asset.objects.get_or_create(item=asset.item, variable=copy, href=asset.href, format=Asset.Format.COG)
     return copy
+
+
+class GeometryAssetTests(SimpleTestCase):
+    """The window is fixed from an asset that was read, never from a zero the
+    planner supplied at the run's start: a zero has no geometry of its own."""
+
+    def test_the_window_comes_from_a_slot_whose_steps_are_all_assets(self):
+        temperature = object()
+
+        self.assertIs(geometry_asset({"tp": [ZERO, object()], "2t": [temperature, object()]}), temperature)
+
+    def test_a_plan_of_accumulated_slots_alone_is_refused_not_a_stop_iteration(self):
+        with self.assertRaisesMessage(NothingToPublish, "no asset to fix the window from"):
+            geometry_asset({"tp": [ZERO, object()]})
