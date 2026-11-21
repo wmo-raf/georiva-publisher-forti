@@ -34,6 +34,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from georiva.core import values
 from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
@@ -151,11 +152,11 @@ def plan(publication) -> PublishPlan:
 
     by_slot = _resolve_slots(publication)
 
-    assets_by_slot = cog_assets(collection, run.reference_time, by_slot)
+    assets_by_slot = readable_assets(collection, run.reference_time, by_slot)
     times = shared_times(assets_by_slot)
     if not times:
         raise NothingToPublish(
-            f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has a COG "
+            f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has data "
             f"for every variable. Variables of one run ingest independently, so this "
             f"resolves itself as the stragglers land."
         )
@@ -227,7 +228,7 @@ def readable_without_credentials(collection) -> bool:
 
     The reader is Forti's — ``rawdataforecaster`` and ``jsonfrontend`` serve
     what is published to anybody who can reach them — not the publisher's own
-    read of the COGs, which goes through core's read module with the worker's
+    read of the assets, which goes through core's read module with the worker's
     credentials. So the rule stands now that the publisher no longer reads a
     public-read bucket by URL: it is about who sees the output.
 
@@ -290,7 +291,7 @@ def _resolve_slots(publication) -> dict:
     if foreign:
         raise PublicationRefused(
             f"{publication.slug} maps {', '.join(foreign)} from outside {collection.slug}. A "
-            f"publication reads its own collection's COGs, so those slots have no asset at "
+            f"publication reads its own collection's assets, so those slots have no asset at "
             f"any timestep. Remap them, or publish the collection they belong to."
         )
 
@@ -313,30 +314,33 @@ def _resolve_slots(publication) -> dict:
     return by_slot
 
 
-def cog_assets(collection, reference_time, by_slot) -> dict:
-    """``{slot key: {time: Asset}}`` for one run's COG assets.
+def readable_assets(collection, reference_time, by_slot) -> dict:
+    """``{slot key: {time: Asset}}`` for the assets of one run that have values.
+
+    Which assets those are is core's question, not this plugin's:
+    :func:`georiva.core.values.readable` answers it — a COG, local or Remote,
+    or a Store asset a store harvest made (ADR 0044) — and the read module that
+    answers it is the one that reads them (ADR 0046 §10). A texture is never
+    among them, so an encoded PNG of a variable is never a slot's values. An
+    ingested run and a harvested run are planned alike.
 
     Public because :mod:`~.readiness` asks the same question ahead of a publish
     rather than during one, and the step count it reports has to be the count
-    this produces. Two readings of "which COGs does this run have" is the
+    this produces. Two readings of "which assets does this run have" is the
     arrangement in which the form promises a number the build then disagrees
     with.
-
-    The rows, not their hrefs: core's read module reads an asset by its row —
-    wherever its bytes are, and in the unit asked of its Variable (ADR 0046 §10).
-    COGs only, for now; a Store asset (ADR 0044) is read the same way, but a
-    store harvest's steps are not yet planned here.
 
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
     an instance that derives dew point and temperature from one field, say — in
     which case its assets belong to both.
     """
-    assets = Asset.objects.filter(
-        item__collection=collection,
-        item__reference_time=reference_time,
-        variable__in=set(by_slot.values()),
-        format=Asset.Format.COG,
+    assets = values.readable(
+        Asset.objects.filter(
+            item__collection=collection,
+            item__reference_time=reference_time,
+            variable__in=set(by_slot.values()),
+        )
     ).select_related("item")
 
     slots_by_variable = {}

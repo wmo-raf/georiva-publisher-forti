@@ -21,10 +21,14 @@ from unittest.mock import patch
 import numpy as np
 from django.test import TestCase
 
-from georiva.core.models import Unit, Variable
+from georiva.core.models import Asset, Unit, Variable
 from georiva.core.publishing import MarkerOrderingError
-from georiva_publisher_forti import config, publisher
+from georiva.harvest.testing import LocalStore, StoreArray, StoreVariable
+from georiva.ingestion.models import RunIngestion
+from georiva.organisations.testing import DEFAULT_TEST_ORG_SLUG, make_organisation
+from georiva_publisher_forti import config, publisher, readiness, tasks
 from georiva_publisher_forti.models import FortiPublication
+from georiva_publisher_forti.planner import PublicationRefused, plan
 from georiva_publisher_forti.publisher import GridMoved, publish
 
 from .assets_on_disk import AssetsOnDiskMixin
@@ -554,3 +558,209 @@ class ConfigOrderingTests(PublishTestCase):
 
         self.assertFalse(result["skipped"])
         self.assertEqual(self.reread().status, FortiPublication.Status.READY)
+
+
+# ---- a store-backed collection ----------------------------------------------------
+
+
+#: The store's arrays, by their path in the store, and the Variable each is
+#: harvested into — named after the slot it fills, so the mapping seeds itself.
+#: Wind speed and direction, and precipitation as a mass per area marked as water.
+STORE_VARIABLES = {
+    "temperature_2m": StoreVariable("2t", source_unit="K"),
+    "dew_point_temperature_2m": StoreVariable("2d", source_unit="K"),
+    "pressure_reduced_to_mean_sea_level": StoreVariable("msl", source_unit="Pa"),
+    "wind_speed_10m": StoreVariable("wind_speed_10m", source_unit="m/s"),
+    "wind_direction_10m": StoreVariable("wind_dir_10m", source_unit="deg"),
+    "total_cloud_cover": StoreVariable("tcc", source_unit="%"),
+    "precipitation_surface": StoreVariable("tp", source_unit="kg m-2", water=True),
+}
+
+#: What each array holds at every step, in its source unit. Precipitation
+#: accumulates from the run's start, 1.5 kg m⁻² per 6-hour step.
+STORE_CONSTANTS = {
+    "temperature_2m": 297.15,
+    "dew_point_temperature_2m": 291.15,
+    "pressure_reduced_to_mean_sea_level": 101300.0,
+    "wind_speed_10m": 4.5,
+    "wind_direction_10m": 120.0,
+    "total_cloud_cover": 45.0,
+}
+
+#: Inside the store's grid (cell centres 5–75 °E, 15 °S–15 °N, 10° apart).
+STORE_BBOX = (10.0, -10.0, 40.0, 10.0)
+
+#: A 6-hourly store, a day long.
+STORE_LEADS = [timedelta(hours=hours) for hours in range(0, 30, 6)]
+
+
+def _constant(value, shape):
+    return lambda run, step: np.full(shape, value, dtype=np.float32)
+
+
+def _accumulating(per_step, shape):
+    return lambda run, step: np.full(shape, step * per_step, dtype=np.float32)
+
+
+class StorePublishTestCase(TemporarySinkMixin, TestCase):
+    """A publication on a collection a store harvest made (ADR 0044): its assets
+    are Store assets, read out of a real Icechunk store on local disk."""
+
+    def setUp(self):
+        self.isolate_sink()
+        self.store = LocalStore(self, leads=STORE_LEADS, arrays=self.store_arrays())
+        harvested = self.store.harvest(make_organisation(DEFAULT_TEST_ORG_SLUG), variables=STORE_VARIABLES)
+        self.collection = harvested.collection
+        self.collection.is_forecast = True
+        self.collection.visibility = self.collection.Visibility.PUBLIC
+        self.collection.save(update_fields=["is_forecast", "visibility"])
+        self.publication = make_publication(self.collection, bbox=STORE_BBOX)
+        self.area_key = self.publication.area_key
+        self.reference_time = self.store.runs[-1]
+
+    def store_arrays(self):
+        shape = (4, 8)
+        arrays = [StoreArray(path, values=_constant(value, shape)) for path, value in STORE_CONSTANTS.items()]
+        arrays.append(StoreArray("precipitation_surface", values=_accumulating(1.5, shape)))
+        return arrays
+
+    def close_run(self):
+        """What a store harvest does once the store holds every step of the run."""
+        steps = len(self.store.leads)
+        return RunIngestion.record_held_steps(
+            self.collection, self.reference_time, held=steps, expected=steps, complete=True
+        )
+
+    def reread(self):
+        return FortiPublication.objects.get(pk=self.publication.pk)
+
+    def published(self):
+        """``(meta, values)`` of the version ``latest/<area key>`` points at, as a reader loads them."""
+        sink = self.publication.sink()
+        version = int(sink.read_bytes(f"latest/{self.area_key}").decode())
+        grid_id = self.reread().grid_id
+        meta = json.loads(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/meta.json"))
+        values = np.frombuffer(sink.read_bytes(f"{self.area_key}/{version}/{grid_id}/data"), dtype="<i2")
+        return meta, values
+
+    def first_value(self, parameter, point=0):
+        meta, values = self.published()
+        entry = meta["parameters"][parameter]
+        return float(values[point * meta["number_of_points"] + entry["slice_from"]]) * entry["scale_factor"]
+
+
+class PublishFromStoreTests(StorePublishTestCase):
+    def test_a_store_backed_run_publishes_a_tree_a_reader_loads(self):
+        self.close_run()
+
+        result = publish(self.publication)
+
+        self.assertFalse(result["skipped"])
+        self.assertEqual(result["steps"], len(STORE_LEADS))
+        self.assertGreater(result["points"], 0)
+        self.assertAlmostEqual(self.first_value("wind_speed_10m"), 4.5, places=5)
+        self.assertAlmostEqual(self.first_value("wind_from_direction_10m"), 120.0, places=5)
+        self.assertAlmostEqual(self.first_value("air_temperature_2m"), 24.0, places=5)
+
+    def test_precipitation_stored_as_water_mass_per_area_publishes_in_millimetres(self):
+        """1.5 kg m⁻² of water per 6-hour step is 1.5 mm over a 6-hour window."""
+        self.close_run()
+
+        publish(self.publication)
+
+        meta, _values = self.published()
+        self.assertEqual(meta["parameters"]["precipitation_amount_acc6h"]["units"], "mm")
+        self.assertAlmostEqual(self.first_value("precipitation_amount_acc6h"), 1.5, places=5)
+
+    def test_precipitation_not_marked_as_water_is_refused_naming_the_flag(self):
+        Variable.objects.filter(collection=self.collection, slug="tp").update(water=False)
+        self.close_run()
+
+        with self.assertRaises(PublicationRefused) as refused:
+            publish(self.reread())
+
+        self.assertIn("water", str(refused.exception))
+
+    def test_an_optional_slot_the_store_has_no_array_for_builds_no_series(self):
+        """The store has no gusts: the slot stays blank and its series is not built."""
+        self.close_run()
+
+        publish(self.publication)
+
+        self.assertIsNone(self.reread().mapped_variables()["10fg"])
+        self.assertNotIn("wind_speed_of_gust", self.reread().published_parameters)
+        self.assertIn("wind_speed_10m", self.reread().published_parameters)
+
+    def test_a_six_hourly_store_publishes_six_and_twelve_hour_series_and_no_one_hour_ones(self):
+        self.close_run()
+
+        publish(self.publication)
+
+        published = self.reread().published_parameters
+        self.assertIn("precipitation_amount_acc6h", published)
+        self.assertIn("weather_symbol_6h", published)
+        self.assertIn("weather_symbol_12h", published)
+        self.assertNotIn("precipitation_amount_acc1h", published)
+        self.assertNotIn("weather_symbol", published)
+
+    def test_texture_assets_are_never_a_slot_s_values(self):
+        """A store harvest's items may carry encoded textures of a variable too;
+        the slot's values are its Store assets, whatever else sits on the item."""
+        for asset in Asset.objects.filter(item__collection=self.collection, variable__slug="wind_speed_10m"):
+            Asset.objects.create(
+                item=asset.item,
+                variable=asset.variable,
+                format=Asset.Format.PNG,
+                href=f"textures/{asset.item.time:%Y%m%d%H}.png",
+                roles=[Asset.Role.VISUAL],
+            )
+        self.close_run()
+
+        planned = plan(self.reread())
+
+        formats = {asset.format for assets in planned.assets.values() for asset in assets}
+        self.assertEqual(formats, {Asset.Format.ZARR})
+
+    def test_readiness_counts_the_steps_the_build_writes(self):
+        self.close_run()
+
+        steps = next(finding for finding in readiness.report(self.reread()).findings if finding.key == "steps")
+        result = publish(self.reread())
+
+        self.assertEqual(steps.state, readiness.READY)
+        self.assertEqual(steps.answer, f"{result['steps']} steps")
+
+
+class StoreRunSignalTests(StorePublishTestCase):
+    """The run-closed signal a store harvest's close emits is the one Forti already handles."""
+
+    def dispatching(self):
+        dispatched = []
+        self.enterContext(
+            patch.object(tasks.publish_forti_area, "delay", side_effect=lambda *args: dispatched.append(args))
+        )
+        return dispatched
+
+    def test_a_run_closing_as_store_held_dispatches_a_build(self):
+        dispatched = self.dispatching()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            run = self.close_run()
+
+        self.assertEqual(run.closed_by, RunIngestion.Closer.STORE_HELD)
+        self.assertEqual([args[0] for args in dispatched], [self.publication.pk])
+
+    def test_a_reopened_store_run_marks_the_publication_stale_and_builds_nothing(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self.close_run()
+        publish(self.reread())
+        dispatched = self.dispatching()
+
+        steps = len(self.store.leads)
+        with self.captureOnCommitCallbacks(execute=True):
+            RunIngestion.record_held_steps(
+                self.collection, self.reference_time, held=steps - 1, expected=steps, complete=False
+            )
+
+        self.assertEqual(self.reread().status, FortiPublication.Status.STALE)
+        self.assertEqual(dispatched, [])

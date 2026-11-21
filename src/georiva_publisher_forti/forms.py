@@ -306,7 +306,7 @@ class VariableMappingFormBase(forms.Form):
         for slot in params.SLOTS:
             field = self.fields[field_name(slot.key)]
             # The collection's own variables and no others, which is also the
-            # model's refusal: a publication reads the COGs of its own
+            # model's refusal: a publication reads the assets of its own
             # collection, so a variable from another has no asset at any step.
             field.queryset = variables
             # Rendered by the page as the row's "Published as" cell, under the
