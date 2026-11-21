@@ -37,6 +37,25 @@ from .grid import Grid, from_raster_window
 WGS84 = "EPSG:4326"
 
 
+class ZeroField:
+    """A field that is zero everywhere, read in place of an asset nobody wrote.
+
+    What a slot accumulated from the run's start holds at the run's start, by
+    definition — and what a store that holds no step there (AIFS) leaves Forti
+    to supply. The planner decides where one stands (:func:`~.planner.readable_assets`);
+    this reads it as the window every other read returns, zero in any unit.
+    """
+
+    href = "(zero at the run's start)"
+
+    def __repr__(self):
+        return "ZERO"
+
+
+#: The one zero field; a plan names it where an asset would stand.
+ZERO = ZeroField()
+
+
 class WindowReader:
     """Reads the same window out of a series of assets, within one reading session."""
 
@@ -70,7 +89,14 @@ class WindowReader:
         return self.grid
 
     def read(self, asset, in_unit: str) -> np.ndarray:
-        """The window from one asset in ``in_unit``, as a ``(rows, cols)`` float32 array."""
+        """The window from one asset in ``in_unit``, as a ``(rows, cols)`` float32 array.
+
+        :data:`ZERO` reads as zeros over the window the other reads fixed: it
+        has no geometry of its own, so it cannot be the read that fixes one."""
+        if asset is ZERO:
+            if self.geometry is None:
+                raise ValueError("A zero field has no geometry; read an asset first to fix the window.")
+            return np.zeros(self.geometry[1], dtype=np.float32)
         if self.geometry is None:
             self.resolve(asset)
         field = self.session.window(asset, self.bbox, in_unit=in_unit)
