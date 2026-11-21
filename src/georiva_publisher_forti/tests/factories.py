@@ -52,7 +52,14 @@ CONSTANTS = {
     "wind_dir_10m": 120.0,
     "10fg": 9.0,
     "tcc": 45.0,
+    # Only written for a collection given them by :func:`add_wind_components`.
+    # A wind from the north-east at 5 m/s.
+    "10u": -3.0,
+    "10v": -4.0,
 }
+
+#: The 10 m wind components, for a collection that gives wind as u and v.
+WIND_COMPONENTS = ("10u", "10v")
 
 
 def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_ORG_SLUG, is_forecast=True):
@@ -98,6 +105,25 @@ def make_collection(slug="ifs-surface", visibility=None, org_slug=DEFAULT_TEST_O
             value_min=-100,
             value_max=2000,
         )
+    return collection
+
+
+def add_wind_components(collection, drop_speed_and_direction=False):
+    """Give a collection 10 m u and v, in m/s — and, asked to, take away its
+    speed and direction, which is how a store harvest's collection looks."""
+    unit, _ = Unit.objects.get_or_create(name="Metre per second", defaults={"symbol": "m/s"})
+    for slug in WIND_COMPONENTS:
+        Variable.objects.create(
+            collection=collection,
+            slug=slug,
+            name=slug,
+            unit=unit,
+            source_unit=unit,
+            value_min=-100,
+            value_max=100,
+        )
+    if drop_speed_and_direction:
+        collection.variables.filter(slug__in=("wind_speed_10m", "wind_dir_10m")).delete()
     return collection
 
 

@@ -40,10 +40,32 @@ class Named:
 
 
 class SlotVocabularyTests(SimpleTestCase):
-    def test_there_are_eight_slots(self):
-        """Seven source-backed parameters plus ``tp``, which only derivations
-        read. The other eight parameters are derived and have no source to map."""
-        self.assertEqual(len(params.SLOTS), 8)
+    def test_there_are_ten_slots(self):
+        """Seven source-backed parameters, ``tp``, which only derivations read,
+        and the two wind components that stand in for speed and direction. The
+        other eight parameters are derived and have no source to map."""
+        self.assertEqual(len(params.SLOTS), 10)
+
+    def test_the_wind_components_are_slots_read_in_metres_per_second(self):
+        for key in ("10u", "10v"):
+            with self.subTest(key=key):
+                slot = params.BY_SLOT[key]
+                self.assertEqual(slot.units, "m/s")
+                self.assertEqual(slot.plausible, (-120.0, 120.0))
+                self.assertEqual(slot.feeds, ("wind_speed_10m", "wind_from_direction_10m"))
+
+    def test_the_wind_components_follow_the_slots_they_stand_in_for(self):
+        keys = list(params.SLOT_KEYS)
+
+        self.assertEqual(keys[keys.index("wind_dir_10m") + 1 : keys.index("wind_dir_10m") + 3], ["10u", "10v"])
+
+    def test_no_wind_slot_is_required_on_its_own(self):
+        """Wind is required as one complete pair, either pair: no single wind
+        slot is required, and none is optional either."""
+        for key in ("wind_speed_10m", "wind_dir_10m", "10u", "10v"):
+            with self.subTest(key=key):
+                self.assertNotIn(key, params.REQUIRED_SLOT_KEYS)
+                self.assertFalse(params.BY_SLOT[key].optional)
 
     def test_every_slot_a_parameter_reads_directly_is_in_the_vocabulary(self):
         direct = {parameter.source for parameter in params.ALL_PARAMETERS if parameter.source}
@@ -90,14 +112,118 @@ class SlotVocabularyTests(SimpleTestCase):
         self.assertTrue(all(low < high for low, high in (slot.plausible for slot in params.SLOTS)))
 
 
+WIND_COMPONENTS = ("10u", "10v")
+
+#: Every slot but the wind components: what a collection holding speed and
+#: direction fills.
+WITH_SPEED_AND_DIRECTION = tuple(key for key in params.SLOT_KEYS if key not in WIND_COMPONENTS)
+
+
+class WindAlternativeTests(SimpleTestCase):
+    """Wind is given one of two complete ways: speed and direction, or u and v.
+
+    Asked of slot keys alone, because it is the one rule the planner refuses
+    with, the readiness page reports and the mapping page shows — and three
+    surfaces saying the same thing is what one function makes possible.
+    """
+
+    def gaps(self, *filled):
+        return params.unresolved_alternatives(filled)
+
+    def test_speed_and_direction_resolve_wind(self):
+        self.assertEqual(self.gaps("wind_speed_10m", "wind_dir_10m"), ())
+
+    def test_u_and_v_resolve_wind(self):
+        self.assertEqual(self.gaps("10u", "10v"), ())
+
+    def test_nothing_set_names_both_ways(self):
+        (gap,) = self.gaps("2t")
+
+        self.assertIn("wind_speed_10m and wind_dir_10m", gap.message)
+        self.assertIn("10u and 10v", gap.message)
+        self.assertEqual(set(gap.missing), {"wind_speed_10m", "wind_dir_10m", "10u", "10v"})
+
+    def test_speed_without_direction_names_direction(self):
+        (gap,) = self.gaps("wind_speed_10m")
+
+        self.assertEqual(gap.missing, ("wind_dir_10m",))
+        self.assertIn("wind_dir_10m is not set", gap.message)
+
+    def test_u_without_v_names_v(self):
+        (gap,) = self.gaps("10u")
+
+        self.assertEqual(gap.missing, ("10v",))
+        self.assertIn("10v is not set", gap.message)
+
+    def test_a_mix_of_the_two_ways_names_what_each_way_is_missing(self):
+        (gap,) = self.gaps("wind_speed_10m", "10v")
+
+        self.assertIn("wind_dir_10m", gap.message)
+        self.assertIn("10u", gap.message)
+        self.assertIn("mixes", gap.message)
+
+    def test_both_ways_complete_is_a_mix_too(self):
+        """Two answers to one question: which one is published is not this
+        rule's to guess."""
+        (gap,) = self.gaps("wind_speed_10m", "wind_dir_10m", "10u", "10v")
+
+        self.assertIn("mixes", gap.message)
+
+    def test_components_stand_in_for_the_wind_parameters(self):
+        """A publication with u and v publishes wind speed and direction."""
+        names = {parameter.name for parameter in params.parameters_for(["10u", "10v"])}
+
+        self.assertIn("wind_speed_10m", names)
+        self.assertIn("wind_from_direction_10m", names)
+
+    def test_one_component_stands_in_for_nothing(self):
+        names = {parameter.name for parameter in params.parameters_for(["10u"])}
+
+        self.assertNotIn("wind_speed_10m", names)
+
+
 class AutoMatchTests(SimpleTestCase):
     def test_a_conventionally_named_collection_fills_every_slot(self):
-        variables = [Named(key) for key in params.SLOT_KEYS]
+        variables = [Named(key) for key in WITH_SPEED_AND_DIRECTION]
 
         matched = auto_match(variables)
 
         self.assertEqual(set(matched), set(params.SLOT_KEYS))
-        self.assertTrue(all(matched[key].slug == key for key in params.SLOT_KEYS))
+        self.assertTrue(all(matched[key].slug == key for key in WITH_SPEED_AND_DIRECTION))
+
+    def test_components_are_matched_when_speed_and_direction_are_not_found(self):
+        variables = [Named(key) for key in params.SLOT_KEYS if key not in ("wind_speed_10m", "wind_dir_10m")]
+
+        matched = auto_match(variables)
+
+        self.assertEqual(matched["10u"].slug, "10u")
+        self.assertEqual(matched["10v"].slug, "10v")
+        self.assertIsNone(matched["wind_speed_10m"])
+
+    def test_components_are_not_matched_beside_speed_and_direction(self):
+        """A collection holding all four (an ingested one: core computed speed
+        and direction from the components) keeps reading speed and direction."""
+        matched = auto_match([Named(key) for key in params.SLOT_KEYS])
+
+        self.assertEqual(matched["wind_speed_10m"].slug, "wind_speed_10m")
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
+
+    def test_components_are_not_matched_beside_speed_alone(self):
+        matched = auto_match([Named("wind_speed_10m"), Named("10u"), Named("10v")])
+
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
+
+    def test_components_are_not_matched_beside_a_wind_slot_already_set(self):
+        """An operator's own speed variable, under another name, is a decision:
+        matching the components beside it would make a mix."""
+        mapped = {"wind_speed_10m": Named("ws"), "wind_dir_10m": None}
+
+        matched = auto_match([Named("10u"), Named("10v")], mapped=mapped)
+
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
 
     def test_an_unrecognised_name_leaves_its_slot_blank(self):
         """Blank rather than absent: the slot exists whether or not anything
@@ -153,7 +279,18 @@ class FillableTests(SimpleTestCase):
         keys = list(reversed(params.SLOT_KEYS))
         offered = fillable(self.blank(*keys), [Named(key) for key in keys])
 
-        self.assertEqual(list(offered), list(params.SLOT_KEYS))
+        self.assertEqual(list(offered), list(WITH_SPEED_AND_DIRECTION))
+
+    def test_components_are_offered_for_blank_wind_when_the_collection_has_only_components(self):
+        offered = fillable(self.blank("wind_speed_10m", "wind_dir_10m", "10u", "10v"), [Named("10u"), Named("10v")])
+
+        self.assertEqual(list(offered), ["10u", "10v"])
+
+    def test_components_are_not_offered_beside_a_speed_already_set(self):
+        """Taking that offer would make a mix the planner refuses."""
+        offered = fillable(self.blank("wind_dir_10m", "10u", "10v"), [Named("10u"), Named("10v")])
+
+        self.assertEqual(offered, {})
 
 
 class Symbol:

@@ -609,7 +609,7 @@ class StorePublishTestCase(TemporarySinkMixin, TestCase):
     def setUp(self):
         self.isolate_sink()
         self.store = LocalStore(self, leads=STORE_LEADS, arrays=self.store_arrays())
-        harvested = self.store.harvest(make_organisation(DEFAULT_TEST_ORG_SLUG), variables=STORE_VARIABLES)
+        harvested = self.store.harvest(make_organisation(DEFAULT_TEST_ORG_SLUG), variables=self.store_variables())
         self.collection = harvested.collection
         self.collection.is_forecast = True
         self.collection.visibility = self.collection.Visibility.PUBLIC
@@ -617,6 +617,9 @@ class StorePublishTestCase(TemporarySinkMixin, TestCase):
         self.publication = make_publication(self.collection, bbox=STORE_BBOX)
         self.area_key = self.publication.area_key
         self.reference_time = self.store.runs[-1]
+
+    def store_variables(self):
+        return STORE_VARIABLES
 
     def store_arrays(self):
         shape = (4, 8)
@@ -729,6 +732,60 @@ class PublishFromStoreTests(StorePublishTestCase):
 
         self.assertEqual(steps.state, readiness.READY)
         self.assertEqual(steps.answer, f"{result['steps']} steps")
+
+
+#: A store that holds the 10 m wind as components only, as an Open-Meteo-style
+#: store does: its harvest maps one array to one Variable and runs no vector
+#: extraction, so there is no speed and no direction to map.
+WIND_COMPONENT_VARIABLES = {
+    **{path: variable for path, variable in STORE_VARIABLES.items() if not path.startswith("wind_")},
+    "wind_u_component_10m": StoreVariable("10u", source_unit="m/s"),
+    "wind_v_component_10m": StoreVariable("10v", source_unit="m/s"),
+}
+
+
+class PublishWindFromComponentsTests(StorePublishTestCase):
+    """A wind from the north-east, 3 m/s westward and 4 m/s southward: 5 m/s
+    from a bearing of 36.87°."""
+
+    def store_variables(self):
+        return WIND_COMPONENT_VARIABLES
+
+    def store_arrays(self):
+        shape = (4, 8)
+        constants = {path: value for path, value in STORE_CONSTANTS.items() if not path.startswith("wind_")}
+        constants |= {"wind_u_component_10m": -3.0, "wind_v_component_10m": -4.0}
+        arrays = [StoreArray(path, values=_constant(value, shape)) for path, value in constants.items()]
+        arrays.append(StoreArray("precipitation_surface", values=_accumulating(1.5, shape)))
+        return arrays
+
+    def test_the_mapping_seeds_itself_with_the_components(self):
+        mapped = self.publication.mapped_variables()
+
+        self.assertEqual((mapped["10u"].slug, mapped["10v"].slug), ("10u", "10v"))
+        self.assertIsNone(mapped["wind_speed_10m"])
+        self.assertIsNone(mapped["wind_dir_10m"])
+
+    def test_wind_speed_and_direction_are_derived_from_the_components(self):
+        self.close_run()
+
+        publish(self.publication)
+
+        meta, _values = self.published()
+        self.assertEqual(meta["parameters"]["wind_speed_10m"]["units"], "m/s")
+        self.assertEqual(meta["parameters"]["wind_from_direction_10m"]["units"], "degrees")
+        self.assertAlmostEqual(self.first_value("wind_speed_10m"), 5.0, places=5)
+        self.assertAlmostEqual(self.first_value("wind_from_direction_10m"), 36.9, places=5)
+
+    def test_the_components_themselves_are_not_published(self):
+        """Forti's format has speed and direction; u and v are inputs only."""
+        self.close_run()
+
+        publish(self.publication)
+
+        meta, _values = self.published()
+        self.assertFalse({"10u", "10v"} & set(meta["parameters"]))
+        self.assertIn("wind_speed_10m", self.reread().published_parameters)
 
 
 class StoreRunSignalTests(StorePublishTestCase):

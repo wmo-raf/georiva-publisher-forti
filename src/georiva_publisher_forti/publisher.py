@@ -256,7 +256,12 @@ def _derive(publish_plan, grid, cubes) -> list[Series]:
 
 def _values_for(parameter, publish_plan, grid, cubes, windows) -> np.ndarray:
     if parameter.source:
-        return cubes[parameter.source]
+        if parameter.source in cubes:
+            return cubes[parameter.source]
+        # Mapped through other slots instead — wind as its u and v components —
+        # and derived from them here, on the transposed cubes, like the rest.
+        recipe, inputs = params.SOURCE_DERIVATIONS[parameter.source]
+        return getattr(derivations, recipe)(*(cubes[key] for key in inputs)).astype(np.float32)
 
     if parameter.derivation == "relative_humidity":
         return derivations.relative_humidity(cubes["2t"], cubes["2d"])

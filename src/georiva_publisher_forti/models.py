@@ -624,8 +624,11 @@ class FortiPublication(BuildDisciplinedModel):
         published at generation 8 would carry a stamp that says it is already a
         correction of itself.
         """
-        existing = set(self.variable_mappings.values_list("slot", flat=True))
-        matched = auto_match(self.collection.variables.all())
+        held = {row.slot: row.variable for row in self.variable_mappings.select_related("variable")}
+        existing = set(held)
+        # Told what is already held, so a row seeded beside a wind slot set one
+        # way is never filled the other way — that would be a mix.
+        matched = auto_match(self.collection.variables.all(), mapped=held)
         missing = [
             FortiVariableMapping(publication=self, slot=key, variable=variable)
             for key, variable in matched.items()
@@ -664,6 +667,17 @@ class FortiPublication(BuildDisciplinedModel):
         """
         mapped = self.mapped_variables() if mapped is None else mapped
         return [key for key, variable in mapped.items() if variable is None and key in params.REQUIRED_SLOT_KEYS]
+
+    def unresolved_alternatives(self, mapped: dict | None = None) -> tuple:
+        """Why wind (or any quantity given one way out of several) does not
+        resolve, as :class:`~.parameters.Gap` values — empty when it does.
+
+        Not part of :meth:`unmapped_slots`, because the answer is not a list of
+        blank slots: a mix is two filled ones that disagree. Allowed at save for
+        the reason a blank slot is, and refused at the publish.
+        """
+        mapped = self.mapped_variables() if mapped is None else mapped
+        return params.unresolved_alternatives(key for key, variable in mapped.items() if variable is not None)
 
     def register_configuration_change(self) -> None:
         """Raise the generation and ask for a republish.

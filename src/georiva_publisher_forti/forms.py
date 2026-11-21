@@ -157,10 +157,17 @@ class Row:
     slot: params.Slot
     field: forms.BoundField
     concerns: tuple[mapping.Concern, ...]
+    #: Whether a gap in the quantity this slot is one way of giving (wind)
+    #: names this row as not set.
+    named_by_a_gap: bool = False
 
     @property
     def incomplete(self) -> bool:
-        # An optional slot left blank is a choice, not a gap.
+        # An optional slot left blank is a choice, not a gap; a wind slot is a
+        # gap only when the wind it belongs to says so — the unused way of
+        # giving wind is blank on purpose.
+        if self.slot.alternative is not None:
+            return self.named_by_a_gap
         return not self.field.value() and not self.slot.optional
 
 
@@ -296,6 +303,7 @@ class VariableMappingFormBase(forms.Form):
         super().__init__(*args, **kwargs)
         self.publication = publication
         self._concerns = None
+        self._gaps = None
         #: Whether this submit moves a slot. False until :meth:`clean` says
         #: otherwise, which is also the right answer for a form nobody has
         #: submitted: reading a warned mapping is not changing it.
@@ -375,14 +383,29 @@ class VariableMappingFormBase(forms.Form):
         a distinction nobody tests.
         """
         raised = self.mapping_concerns()
+        missing = {key for gap in self.mapping_gaps() for key in gap.missing}
         return tuple(
             Row(
                 slot=slot,
                 field=self[field_name(slot.key)],
                 concerns=tuple(concern for concern in raised if concern.slot == slot.key),
+                named_by_a_gap=slot.key in missing,
             )
             for slot in params.SLOTS
         )
+
+    def mapping_gaps(self) -> tuple[params.Gap, ...]:
+        """What stops wind resolving, as the mapping currently stands.
+
+        The same :class:`~.parameters.Gap` the readiness row and the planner's
+        refusal say, so the three cannot word one gap three ways. Shown, not
+        enforced: like a blank slot, an incomplete wind is legal to save and
+        reads as not ready. On a bound form it is the *posted* mapping, as
+        :meth:`mapping_concerns` is.
+        """
+        if self._gaps is None:
+            self._gaps = self.publication.unresolved_alternatives()
+        return self._gaps
 
     def mapping_concerns(self) -> tuple[mapping.Concern, ...]:
         """The warnings about the mapping as it currently stands.
@@ -427,6 +450,7 @@ class VariableMappingFormBase(forms.Form):
             posted[slot.key] = variable
 
         self._concerns = mapping.concerns(posted)
+        self._gaps = self.publication.unresolved_alternatives(posted)
         self._remapping = self._moves_a_slot(posted)
         if self.acknowledgement is not None and not cleaned.get(ACKNOWLEDGE_FIELD):
             self.add_error(ACKNOWLEDGE_FIELD, ACKNOWLEDGEMENT_REQUIRED)

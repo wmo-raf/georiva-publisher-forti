@@ -15,6 +15,8 @@ from django.test import SimpleTestCase
 from georiva_publisher_forti.derivations import (
     accumulation_window,
     relative_humidity,
+    wind_from_direction,
+    wind_speed,
     window_max,
     window_mean,
     window_min,
@@ -129,3 +131,51 @@ class RelativeHumidityTests(SimpleTestCase):
         humidity = relative_humidity(np.array([[20.0]]), np.array([[21.0]]))
 
         self.assertEqual(float(humidity[0, 0]), 100.0)
+
+
+class WindFromComponentsTests(SimpleTestCase):
+    """Speed and direction from 10 m u and v, for a collection that holds only
+    the components — as a store harvest does, mapping one array to one Variable.
+
+    Direction is the meteorological one, the bearing the wind blows *from*, the
+    convention core's vector-direction transform writes at ingestion: u is
+    eastward and v northward, so a wind blowing towards the south comes from 0°.
+    """
+
+    def components(self, *pairs):
+        u = np.array([[u for u, _ in pairs]], dtype=np.float32)
+        v = np.array([[v for _, v in pairs]], dtype=np.float32)
+        return u, v
+
+    def test_speed_is_the_vector_magnitude(self):
+        u, v = self.components((3.0, 4.0), (-3.0, -4.0), (0.0, -7.5))
+
+        np.testing.assert_allclose(wind_speed(u, v), [[5.0, 5.0, 7.5]], atol=1e-6)
+
+    def test_a_wind_from_each_compass_point(self):
+        """From the north blows southwards: v negative. From the east blows westwards: u negative."""
+        u, v = self.components((0.0, -5.0), (-5.0, 0.0), (0.0, 5.0), (5.0, 0.0))
+
+        np.testing.assert_allclose(wind_from_direction(u, v), [[0.0, 90.0, 180.0, 270.0]], atol=1e-4)
+
+    def test_a_wind_from_each_quadrant(self):
+        u, v = self.components((-3.0, -3.0), (-3.0, 3.0), (3.0, 3.0), (3.0, -3.0))
+
+        np.testing.assert_allclose(wind_from_direction(u, v), [[45.0, 135.0, 225.0, 315.0]], atol=1e-4)
+
+    def test_direction_stays_below_a_full_circle(self):
+        """A wind a hair west of north rounds into [0, 360), never to 360 itself."""
+        u, v = self.components((1e-12, -5.0), (1e-3, -5.0))
+
+        direction = wind_from_direction(u, v)
+
+        self.assertTrue(((direction >= 0.0) & (direction < 360.0)).all())
+
+    def test_calm_has_no_speed_and_the_direction_core_gives_it(self):
+        """No wind has no direction worth reading; it is given the bearing core's
+        transform computes for zero components, so a map and a point forecast of
+        one calm cell agree."""
+        u, v = self.components((0.0, 0.0))
+
+        self.assertEqual(wind_speed(u, v).tolist(), [[0.0]])
+        self.assertEqual(wind_from_direction(u, v).tolist(), [[180.0]])

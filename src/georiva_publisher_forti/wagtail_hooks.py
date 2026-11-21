@@ -551,6 +551,7 @@ def mapping_page(request, publication_pk):
         "publication": publication,
         "form": form,
         "rows": form.mapping_rows(),
+        "gaps": form.mapping_gaps(),
         "acknowledgement": form.acknowledgement,
         "offer": form.offer,
         "incomplete_label": forms.INCOMPLETE_LABEL,

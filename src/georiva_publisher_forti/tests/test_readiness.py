@@ -27,7 +27,15 @@ from django.test import TestCase
 from georiva.core.models import Collection
 from georiva_publisher_forti import readiness
 
-from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, restate_source_unit, write_cogs
+from .factories import (
+    REFERENCE_TIME,
+    add_wind_components,
+    make_collection,
+    make_publication,
+    make_run,
+    restate_source_unit,
+    write_cogs,
+)
 
 
 class ReadinessTests(TestCase):
@@ -62,6 +70,47 @@ class ReadinessTests(TestCase):
 
         self.assertEqual(finding.state, readiness.READY)
         self.assertIn("10fg is optional", finding.detail)
+
+    def test_wind_without_direction_is_a_change_naming_direction(self):
+        make_run(self.collection)
+        self.publication.variable_mappings.filter(slot="wind_dir_10m").update(variable=None)
+
+        finding = self.finding(readiness.report(self.publication), "slots")
+
+        self.assertEqual(finding.state, readiness.BLOCKED)
+        self.assertEqual(finding.answer, "6 of 7")
+        self.assertIn("wind_dir_10m is not set", finding.detail)
+
+    def test_wind_mixing_two_ways_is_a_change(self):
+        add_wind_components(self.collection)
+        make_run(self.collection)
+        self.publication.variable_mappings.update_or_create(
+            slot="10u", defaults={"variable": self.collection.variables.get(slug="10u")}
+        )
+
+        finding = self.finding(readiness.report(self.publication), "slots")
+
+        self.assertEqual(finding.state, readiness.BLOCKED)
+        self.assertIn("mixes", finding.detail)
+
+    def test_wind_given_as_components_is_ready_and_counted_like_speed_and_direction(self):
+        collection = add_wind_components(make_collection(slug="store-surface"), drop_speed_and_direction=True)
+        publication = make_publication(collection, slug="store")
+        make_run(collection)
+
+        finding = self.finding(readiness.report(publication), "slots")
+
+        self.assertEqual(finding.state, readiness.READY)
+        self.assertEqual(finding.answer, "7 of 7")
+        self.assertNotIn("wind_speed_10m", finding.detail)
+
+    def test_the_unused_way_of_giving_wind_is_not_reported_as_left_out(self):
+        make_run(self.collection)
+
+        finding = self.finding(readiness.report(self.publication), "slots")
+
+        self.assertEqual(finding.answer, "7 of 7")
+        self.assertNotIn("10u", finding.detail)
 
     def test_a_blank_slot_will_never_publish_on_its_own(self):
         """The other half of the distinction. Waiting fixes a run that has not

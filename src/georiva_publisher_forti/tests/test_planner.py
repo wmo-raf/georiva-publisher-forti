@@ -24,7 +24,15 @@ from georiva.core.models import Asset, Collection, Unit, Variable
 from georiva_publisher_forti.models import GENERATIONS_PER_REVISION, FortiPublication
 from georiva_publisher_forti.planner import NothingToPublish, PublicationRefused, plan
 
-from .factories import REFERENCE_TIME, make_collection, make_publication, make_run, restate_source_unit, write_cogs
+from .factories import (
+    REFERENCE_TIME,
+    add_wind_components,
+    make_collection,
+    make_publication,
+    make_run,
+    restate_source_unit,
+    write_cogs,
+)
 
 
 class PlannerTestCase(TestCase):
@@ -143,6 +151,56 @@ class SourceValidationTests(PlannerTestCase):
             plan(self.publication)
 
         self.assertIn("tcc", str(ctx.exception))
+
+    def test_speed_without_direction_is_refused_naming_direction(self):
+        self._remap("wind_dir_10m", None)
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("wind_dir_10m is not set", str(ctx.exception))
+
+    def test_no_wind_at_all_is_refused_naming_both_ways(self):
+        self._remap("wind_speed_10m", None)
+        self._remap("wind_dir_10m", None)
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        self.assertIn("10u and 10v", str(ctx.exception))
+
+    def test_wind_mixing_speed_and_components_is_refused(self):
+        add_wind_components(self.collection)
+        self._remap("wind_dir_10m", None)
+        self._remap("10v", self.collection.variables.get(slug="10v"))
+        write_cogs(self.collection, self.path)
+        make_run(self.collection)
+
+        with self.assertRaises(PublicationRefused) as ctx:
+            plan(self.publication)
+
+        message = str(ctx.exception)
+        self.assertIn("mixes", message)
+        self.assertIn("wind_dir_10m", message)
+        self.assertIn("10u", message)
+
+    def test_wind_given_as_components_plans_speed_and_direction(self):
+        collection = add_wind_components(make_collection(slug="store-surface"), drop_speed_and_direction=True)
+        publication = make_publication(collection, slug="store")
+        write_cogs(collection, self.path)
+        make_run(collection)
+
+        publish_plan = plan(publication)
+
+        names = {parameter.name for parameter in publish_plan.parameters}
+        self.assertIn("wind_speed_10m", names)
+        self.assertIn("wind_from_direction_10m", names)
+        self.assertEqual({"10u", "10v"} & set(publish_plan.assets), {"10u", "10v"})
+        self.assertNotIn("wind_speed_10m", publish_plan.assets)
 
     def test_wind_gust_may_be_left_blank_and_is_left_out(self):
         """Not every model writes a gust — WRF does not by default. Nothing derives

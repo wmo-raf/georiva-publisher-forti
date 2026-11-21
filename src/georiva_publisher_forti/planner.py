@@ -258,7 +258,9 @@ def _resolve_slots(publication) -> dict:
     of the instance already uses.
 
     Three refusals, in the order an operator can act on them. A **blank slot** is
-    a configuration that is not finished — legal to save, impossible to publish.
+    a configuration that is not finished — legal to save, impossible to publish —
+    and so is **wind** given neither way completely, or both ways at once
+    (:func:`~.parameters.unresolved_alternatives`).
     A variable from **another collection** would have no asset at any timestep,
     and refusing here says so instead of letting the step intersection come back
     empty and blame the run. And a **unit that cannot be converted**: every slot
@@ -282,6 +284,9 @@ def _resolve_slots(publication) -> dict:
             f"the parameter map has to name a variable of {collection.slug} before this can "
             f"publish — fill the blank ones in on the publication."
         )
+    gaps = publication.unresolved_alternatives(by_slot)
+    if gaps:
+        raise PublicationRefused(f"{publication.slug} cannot publish yet. " + " ".join(gap.message for gap in gaps))
     # What is left blank is optional, and is not part of this publish.
     by_slot = {key: variable for key, variable in by_slot.items() if variable is not None}
 

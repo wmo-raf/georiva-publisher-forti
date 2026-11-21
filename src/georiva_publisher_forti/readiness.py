@@ -228,12 +228,13 @@ def report(publication) -> Readiness:
     run = RunIngestion.latest_closed(collection)
     mapped = publication.mapped_variables()
     blank, foreign = _unresolved_slots(collection, publication, mapped)
+    gaps = publication.unresolved_alternatives(mapped)
 
     above = (
         _forecast(collection),
         _visibility(collection),
         _runs(collection, run),
-        _slots(collection, mapped, blank, foreign),
+        _slots(collection, mapped, blank, foreign, gaps),
         _units(mapped),
     )
     return Readiness(findings=(*above, _steps(collection, run, mapped, refused=_any_blocked(above))))
@@ -344,7 +345,7 @@ def _unresolved_slots(collection, publication, mapped: dict) -> tuple[list, list
     return blank, foreign
 
 
-def _slots(collection, mapped: dict, blank: list, foreign: list) -> Finding:
+def _slots(collection, mapped: dict, blank: list, foreign: list, gaps=()) -> Finding:
     """Whether every slot resolves to a variable this publication can read.
 
     Both ways of failing are one finding rather than two, because they are one
@@ -354,11 +355,14 @@ def _slots(collection, mapped: dict, blank: list, foreign: list) -> Finding:
     Both are :data:`BLOCKED`. Neither is fixed by any run closing, which is the
     whole of what separates this row from the one above it.
     """
-    required = len(params.REQUIRED_SLOT_KEYS)
-    answer = f"{required - len(blank)} of {required}"
-    if blank or foreign:
-        return Finding(key="slots", state=BLOCKED, answer=answer, detail=_slot_detail(collection, blank, foreign))
-    left_out = [key for key, variable in mapped.items() if variable is None]
+    # Out of the slots this mapping needs: wind counts as the pair it is
+    # closest to giving, so either way of giving it reads "7 of 7" complete.
+    filled = {key for key, variable in mapped.items() if variable is not None}
+    required = params.required_for(filled)
+    answer = f"{sum(key in filled for key in required)} of {len(required)}"
+    if blank or foreign or gaps:
+        return Finding(key="slots", state=BLOCKED, answer=answer, detail=_slot_detail(collection, blank, foreign, gaps))
+    left_out = [key for key, variable in mapped.items() if variable is None and params.BY_SLOT[key].optional]
     if left_out:
         return Finding(
             key="slots",
@@ -484,13 +488,16 @@ def _steps(collection, run, mapped: dict, refused: bool) -> Finding:
     return Finding(key="steps", state=READY, answer=f"{len(shared)} steps")
 
 
-def _slot_detail(collection, blank: list, foreign: list) -> str:
+def _slot_detail(collection, blank: list, foreign: list, gaps=()) -> str:
     said = []
     if blank:
         said.append(
             f"{listed(blank)} is not set. Every required Forti parameter needs a variable — "
             f"set it on the Variables page."
         )
+    # The gap's own sentence, which the mapping page and the planner's refusal
+    # say too — one rule, worded once.
+    said.extend(gap.message for gap in gaps)
     if foreign:
         said.append(f"{listed(foreign)} uses a variable from a different collection than {collection.slug}.")
     return " ".join(said)
