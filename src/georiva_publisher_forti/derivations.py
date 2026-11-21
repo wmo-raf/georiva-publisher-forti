@@ -15,6 +15,10 @@ game.
 
 import numpy as np
 
+# Wind from its components is core's, so a direction core computed at ingestion
+# and one computed here from a store's u and v agree, calm included (180°).
+from georiva.geoprocessing import wind_from_direction, wind_speed  # noqa: F401
+
 #: Below this, an accumulation that goes backwards is packing noise rather than a
 #: variable that is not an accumulation at all. In mm.
 #:
@@ -40,29 +44,6 @@ def relative_humidity(temperature_c: np.ndarray, dew_point_c: np.ndarray) -> np.
         return np.exp((17.625 * celsius) / (243.04 + celsius))
 
     return np.clip(100.0 * saturation(dew_point_c) / saturation(temperature_c), 0.0, 100.0)
-
-
-def wind_speed(u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """The 10 m wind speed from its eastward and northward components: the
-    vector magnitude, in the components' unit."""
-    return np.hypot(u, v)
-
-
-def wind_from_direction(u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """The bearing the wind blows *from*, in degrees in [0, 360), 0 north and
-    clockwise — the meteorological convention.
-
-    The same expression as core's vector-direction transform at ingestion
-    (``Extractor._extract_vector_direction``), so a collection whose direction
-    was computed by core and one whose direction is computed here publish the
-    same number for the same wind — calm included, which both put at 180.
-
-    The modulo can round a bearing a hair below 360 up to 360 itself in floating
-    point; that one value is folded back to 0 so the series stays inside the
-    half-open circle a reader expects.
-    """
-    direction = np.mod(np.degrees(np.arctan2(u, v)) + 180.0, 360.0)
-    return np.where(direction >= 360.0, 0.0, direction)
 
 
 def accumulation_window(accumulated: np.ndarray, windows) -> np.ndarray:

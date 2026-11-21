@@ -45,6 +45,7 @@ per area not flagged as water) is refused.
 
 from dataclasses import dataclass
 
+from . import derivations
 from .prose import listed
 
 #: locationforecast's four buckets. The key is the duration; ``instant`` is the
@@ -409,8 +410,8 @@ ALTERNATIVES = (WIND,)
 #: Speed is the vector magnitude; direction is the bearing the wind comes from,
 #: as core's vector-direction transform computes it at ingestion.
 SOURCE_DERIVATIONS = {
-    "wind_speed_10m": ("wind_speed", ("10u", "10v")),
-    "wind_dir_10m": ("wind_from_direction", ("10u", "10v")),
+    "wind_speed_10m": (derivations.wind_speed, ("10u", "10v")),
+    "wind_dir_10m": (derivations.wind_from_direction, ("10u", "10v")),
 }
 
 
@@ -506,6 +507,16 @@ class Slot:
     slot is neither required nor optional on its own: the alternative is
     required, as one complete way."""
 
+    @property
+    def required(self) -> bool:
+        """Whether a publication cannot publish with this slot blank, on its own.
+
+        The one question every surface asks of a slot: the planner's blank-slot
+        refusal, the readiness count and the mapping page's blank rows. A slot
+        of an alternative is not — whether it is needed is the alternative's
+        to say (:func:`unresolved_alternatives`) — and neither is an optional one."""
+        return not self.optional and self.alternative is None
+
 
 def _build_slots() -> tuple[Slot, ...]:
     """The vocabulary, in the order the parameter map first reads each slot.
@@ -589,7 +600,7 @@ SLOT_KEYS = tuple(slot.key for slot in SLOTS)
 #: The slots a publication cannot publish without, each on its own. The rest
 #: are optional, or one way of giving an :data:`ALTERNATIVES` quantity, which is
 #: required as a whole — see :func:`unresolved_alternatives`.
-REQUIRED_SLOT_KEYS = tuple(slot.key for slot in SLOTS if not slot.optional and slot.alternative is None)
+REQUIRED_SLOT_KEYS = tuple(slot.key for slot in SLOTS if slot.required)
 
 
 def required_for(filled) -> tuple[str, ...]:
