@@ -63,7 +63,7 @@ the consequence of a change is read where it shows. It reads the database and
 nothing else, for the reason the history panel always gave: a page behind object
 storage's deadline is one that cannot be opened while the bucket is slow.
 
-**The mapping page** is the eight slots on a page of their own, reached from the
+**The mapping page** is the slots on a page of their own, reached from the
 listing and from the inspect page, and the page a new publication lands on so
 that what auto-match found is read by the one person who can judge it. Its rule
 is in :mod:`~.forms`.
@@ -333,8 +333,8 @@ class FortiPublicationCreateView(ForecastCollectionsOnlyMixin, CreateView):
     def get_success_url(self):
         """Straight to the mapping page, not the listing.
 
-        Creation has just seeded eight rows by auto-match, and whether it found
-        eight or five is a thing only the operator can judge — so they are shown
+        Creation has just seeded a row per slot by auto-match, and whether it
+        filled all of them or half is a thing only the operator can judge — so they are shown
         it now, while the collection is still in mind, rather than left to
         re-open the publication and find out.
         """
@@ -519,7 +519,7 @@ def _scoped_publication(request, publication_pk):
 
 
 def mapping_page(request, publication_pk):
-    """The eight slots, on the page that knows which collection they are of.
+    """The slots, on the page that knows which collection they are of.
 
     Reached from the listing, from the inspect page, and as the page a new
     publication lands on. Saving returns to the inspect page: every path in

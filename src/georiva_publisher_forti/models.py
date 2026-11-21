@@ -619,10 +619,10 @@ class FortiPublication(BuildDisciplinedModel):
 
         Written with ``bulk_create``, which is not an optimisation — it is what
         keeps seeding from going through
-        :meth:`FortiVariableMapping.save` and raising the generation eight
-        times. A publication being born is not its bytes changing; a first run
-        published at generation 8 would carry a stamp that says it is already a
-        correction of itself.
+        :meth:`FortiVariableMapping.save` and raising the generation once per
+        slot. A publication being born is not its bytes changing; a first run
+        published at a generation above 0 would carry a stamp that says it is
+        already a correction of itself.
         """
         held = {row.slot: row.variable for row in self.variable_mappings.select_related("variable")}
         existing = set(held)
@@ -741,7 +741,7 @@ class FortiPublication(BuildDisciplinedModel):
 class FortiVariableMapping(models.Model):
     """Which variable fills one slot of one publication.
 
-    Eight rows per publication, one per slot, and the slot set is fixed — so
+    One row per slot per publication, and the slot set is fixed — so
     this is not a list an operator adds to and removes from. What is editable is
     the *variable* in each row, and a row with none is a slot waiting to be
     filled.
@@ -842,8 +842,8 @@ class FortiVariableMapping(models.Model):
 
         A save that writes the variable the row already held is not a
         configuration change, and must not be counted as one. The editor of #13
-        posts all eight rows at every submit, so counting saves rather than
-        changes would raise the generation by eight per submit against a ceiling
+        posts every row at every submit, so counting saves rather than
+        changes would raise the generation by the slot count per submit against a ceiling
         of ninety-nine that **refuses to publish** — twelve idle submits inside
         one run window and the model cannot publish again until the next run.
 
