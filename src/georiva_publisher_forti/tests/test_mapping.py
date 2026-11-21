@@ -5,7 +5,7 @@ match hidden inside the planner, so a collection that named its variables
 anything else could not publish at all and the only way to find out was to
 publish and read the refusal. It is data now: one row per slot.
 
-Three things are worth testing without a database. The **vocabulary** — eight
+Three things are worth testing without a database. The **vocabulary** — its
 slots, derived from the parameter map rather than typed out again beside it, so
 a parameter added with a new source cannot leave a slot nobody can fill. The
 **auto-match**, which is the old hard-coded rule kept as a default: a migration
@@ -16,6 +16,11 @@ is nonetheless legal — and whose honesty matters more than their coverage, sin
 the confusion that matters is the one neither of them can see.
 """
 
+import importlib
+import importlib.util
+from pathlib import Path
+
+from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import RestrictedError
 from django.db.utils import IntegrityError
@@ -26,7 +31,7 @@ from georiva_publisher_forti import parameters as params
 from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns, fillable
 from georiva_publisher_forti.models import FortiPublication, FortiVariableMapping
 
-from .factories import make_collection, make_publication, restate_source_unit
+from .factories import add_wind_components, make_collection, make_publication, restate_source_unit
 
 
 class Named:
@@ -411,7 +416,7 @@ class ConcernTests(SimpleTestCase):
 
 
 class SeedingTests(TestCase):
-    """A publication comes into the world with its eight slots already there.
+    """A publication comes into the world with its slots already there.
 
     Seeding by auto-match is what keeps the change invisible to every
     conventionally-named collection: the mapping a new publication starts with
@@ -443,7 +448,7 @@ class SeedingTests(TestCase):
         self.assertEqual(publication.unmapped_slots(), ["tcc"])
 
     def test_seeding_does_not_count_as_a_configuration_change(self):
-        """Eight rows appearing at creation is the publication being born, not
+        """A row per slot appearing at creation is the publication being born, not
         its bytes changing: a generation raised here would publish the first run
         under a stamp that says it is already a correction."""
         publication = make_publication(self.collection)
@@ -638,3 +643,60 @@ class ConfigurationChangeTests(TestCase):
         self.publication.refresh_from_db()
 
         self.assertEqual(self.publication.generation, before + 1)
+
+
+class ComponentSlotsMigrationTests(TestCase):
+    """0008 seeds the wind component rows of publications that predate them, by
+    its own frozen copy of the match: what it wrote must not change when the
+    live auto-match does."""
+
+    def seed(self):
+        migration = importlib.import_module("georiva_publisher_forti.migrations.0008_wind_component_slots")
+        migration.seed_component_rows(django_apps, None)
+
+    def publication_before_0008(self, collection):
+        publication = make_publication(collection)
+        publication.variable_mappings.filter(slot__in=("10u", "10v")).delete()
+        return publication
+
+    def components(self, publication):
+        rows = publication.variable_mappings.filter(slot__in=("10u", "10v")).select_related("variable")
+        return {row.slot: row.variable.slug if row.variable else None for row in rows}
+
+    def test_a_collection_with_only_components_gets_them_filled(self):
+        collection = add_wind_components(make_collection(), drop_speed_and_direction=True)
+        publication = self.publication_before_0008(collection)
+        publication.variable_mappings.filter(slot__in=("wind_speed_10m", "wind_dir_10m")).update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": "10u", "10v": "10v"})
+
+    def test_a_publication_reading_speed_and_direction_gets_blank_rows(self):
+        publication = self.publication_before_0008(add_wind_components(make_collection()))
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": None, "10v": None})
+
+    def test_a_collection_with_speed_and_direction_named_gets_blank_rows_even_if_unmapped(self):
+        publication = self.publication_before_0008(add_wind_components(make_collection()))
+        publication.variable_mappings.filter(slot__in=("wind_speed_10m", "wind_dir_10m")).update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": None, "10v": None})
+
+    def test_a_row_already_there_is_left_alone(self):
+        collection = add_wind_components(make_collection(), drop_speed_and_direction=True)
+        publication = make_publication(collection)
+        publication.variable_mappings.filter(slot="10v").update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": "10u", "10v": None})
+
+    def test_it_does_not_import_the_live_auto_match(self):
+        source = Path(importlib.util.find_spec("georiva_publisher_forti.migrations.0008_wind_component_slots").origin)
+
+        self.assertNotIn("from georiva_publisher_forti", source.read_text())

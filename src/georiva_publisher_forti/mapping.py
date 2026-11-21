@@ -17,13 +17,15 @@ machine check will ever catch it. A surface that renders these without saying so
 has told an operator their mapping was verified. It was not.
 
 Kept in a module of its own, pure, and importing no models — only core's unit
-rule, which is pint — because a data migration imports it. A migration that reached into ``models`` would
-rewrite its own history the next time a model changed; one that duplicated the
-rule would describe the bytes a publication is serving using a rule that is no
-longer the one that produced them. :func:`concerns` is written to the same
-constraint for a different reason: it is a judgment about eight names and eight
-number pairs, and a function that needed a database to make it could not be
-tested without one.
+rule, which is pint — because migration 0005 imports it. A migration that
+reached into ``models`` would rewrite its own history the next time a model
+changed; 0005 imports the rule rather than copying it because its rows describe
+the bytes then being served, by the rule that produced them. Migration 0008,
+which seeds rows nobody has published from yet, keeps a frozen copy instead, so
+a later change here cannot change what it wrote. :func:`concerns` is written to
+the same constraint for a different reason: it is a judgment about a handful of
+names and number pairs, and a function that needed a database to make it could
+not be tested without one.
 """
 
 from dataclasses import dataclass
