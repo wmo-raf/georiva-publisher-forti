@@ -45,6 +45,9 @@ per area not flagged as water) is refused.
 
 from dataclasses import dataclass
 
+from . import derivations
+from .prose import listed
+
 #: locationforecast's four buckets. The key is the duration; ``instant`` is the
 #: value at the timestep itself.
 INSTANT = "instant"
@@ -295,7 +298,132 @@ DERIVATION_INPUTS = {
 #: its unit — and every slot is read in a declared unit, so every slot must have one.
 DERIVED_INPUT_UNITS = {
     "tp": "mm",
+    "10u": "m/s",
+    "10v": "m/s",
 }
+
+
+@dataclass(frozen=True)
+class Way:
+    """One complete set of slots that gives a quantity."""
+
+    label: str
+    """What an operator calls this way, in a sentence."""
+
+    keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Alternative:
+    """A quantity a publication gives one complete way out of several.
+
+    Wind, which a collection holds either as speed and direction — core
+    computes those from the components at ingestion — or as the components
+    alone, as a store harvest does: it maps one array to one Variable and runs
+    no vector extraction. Each way is complete on its own, and a mapping must
+    use exactly one: a slot of one way beside a slot of the other is two
+    answers to one question, and which one is published is not this plugin's to
+    guess. So no slot of an alternative is required on its own, and none is
+    optional either.
+    """
+
+    name: str
+    ways: tuple[Way, ...]
+
+    @property
+    def keys(self) -> tuple[str, ...]:
+        return tuple(key for way in self.ways for key in way.keys)
+
+    def gap(self, filled: set) -> "Gap | None":
+        """What stops this alternative resolving with these slots filled, if anything."""
+        touched = [way for way in self.ways if any(key in filled for key in way.keys)]
+        either = " or ".join(f"{listed(way.keys)} ({way.label})" for way in self.ways)
+
+        if not touched:
+            return Gap(
+                alternative=self.name,
+                missing=self.keys,
+                message=f"{self.name.capitalize()} is not set. Set {either}.",
+            )
+
+        if len(touched) == 1:
+            (way,) = touched
+            missing = tuple(key for key in way.keys if key not in filled)
+            if not missing:
+                return None
+            have = [key for key in way.keys if key in filled]
+            return Gap(
+                alternative=self.name,
+                missing=missing,
+                message=(
+                    f"{self.name.capitalize()} is incomplete: {listed(missing)} is not set, and "
+                    f"{listed(have)} needs it. Set {either}."
+                ),
+            )
+
+        set_per_way = " and ".join(
+            f"{listed([key for key in way.keys if key in filled])} ({way.label})" for way in touched
+        )
+        remedies = []
+        for way in self.ways:
+            missing = [key for key in way.keys if key not in filled]
+            others = [key for other in self.ways if other is not way for key in other.keys if key in filled]
+            needed = f"set {listed(missing)} and clear {listed(others)}" if missing else f"clear {listed(others)}"
+            remedies.append(f"for {way.label}, {needed}")
+        return Gap(
+            alternative=self.name,
+            missing=(),
+            message=(
+                f"{self.name.capitalize()} mixes two ways of giving it: {set_per_way}. Use one — "
+                f"{'; or '.join(remedies)}."
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class Gap:
+    """Why an alternative does not resolve, said once for every surface that says it."""
+
+    alternative: str
+    missing: tuple[str, ...]
+    """The slots a row should read as not set. Empty for a mix, which is not a
+    blank row but two filled ones that disagree."""
+
+    message: str
+
+
+WIND = Alternative(
+    name="wind",
+    ways=(
+        Way(label="speed and direction", keys=("wind_speed_10m", "wind_dir_10m")),
+        Way(label="u and v components", keys=("10u", "10v")),
+    ),
+)
+
+#: Every quantity given one way out of several. The first way of each is the
+#: one the parameter map reads directly; the others stand in for it through
+#: :data:`SOURCE_DERIVATIONS`.
+ALTERNATIVES = (WIND,)
+
+#: A parameter's source, derived after the transpose from other slots when the
+#: publication fills those instead: ``{source slot: (recipe, input slots)}``.
+#: Speed is the vector magnitude; direction is the bearing the wind comes from,
+#: as core's vector-direction transform computes it at ingestion.
+SOURCE_DERIVATIONS = {
+    "wind_speed_10m": (derivations.wind_speed, ("10u", "10v")),
+    "wind_dir_10m": (derivations.wind_from_direction, ("10u", "10v")),
+}
+
+
+def unresolved_alternatives(filled) -> tuple[Gap, ...]:
+    """Every alternative these filled slots do not resolve to exactly one way.
+
+    Keys only, so the planner's refusal, the readiness finding and the mapping
+    page all ask the same function and say the same sentence.
+    """
+    filled = set(filled)
+    return tuple(gap for gap in (alternative.gap(filled) for alternative in ALTERNATIVES) if gap is not None)
+
 
 #: What each slot's values plausibly span, in the slot's own unit — generous on
 #: purpose, because this is the loose half of a pair whose other half is exact.
@@ -326,6 +454,9 @@ PLAUSIBLE_RANGES = {
     "wind_speed_10m": (0.0, 120.0),
     # A compass bearing, whole circle.
     "wind_dir_10m": (0.0, 360.0),
+    # A signed component of the sustained wind above, either way.
+    "10u": (-120.0, 120.0),
+    "10v": (-120.0, 120.0),
     "10fg": (0.0, 150.0),
     # A fraction expressed as a percentage, already scaled by the source plugin.
     "tcc": (0.0, 100.0),
@@ -371,6 +502,21 @@ class Slot:
     that reads the slot is itself optional — a slot a required series or a
     derivation needs is required, whatever else reads it."""
 
+    alternative: str | None = None
+    """The :class:`Alternative` this slot is one way of giving, if any. Such a
+    slot is neither required nor optional on its own: the alternative is
+    required, as one complete way."""
+
+    @property
+    def required(self) -> bool:
+        """Whether a publication cannot publish with this slot blank, on its own.
+
+        The one question every surface asks of a slot: the planner's blank-slot
+        refusal, the readiness count and the mapping page's blank rows. A slot
+        of an alternative is not — whether it is needed is the alternative's
+        to say (:func:`unresolved_alternatives`) — and neither is an optional one."""
+        return not self.optional and self.alternative is None
+
 
 def _build_slots() -> tuple[Slot, ...]:
     """The vocabulary, in the order the parameter map first reads each slot.
@@ -395,6 +541,21 @@ def _build_slots() -> tuple[Slot, ...]:
                 feeds[key].append(parameter.name)
         if parameter.source and parameter.expects_unit:
             units[parameter.source] = parameter.expects_unit
+
+    # A slot standing in for a source, read by the parameters that source
+    # feeds and placed straight after the last slot of the way it stands in for.
+    for source, (_recipe, inputs) in SOURCE_DERIVATIONS.items():
+        for key in inputs:
+            feeds.setdefault(key, [])
+            for name in feeds[source]:
+                if name not in feeds[key]:
+                    feeds[key].append(name)
+    order = [key for key in feeds if not any(key in way.keys for a in ALTERNATIVES for way in a.ways[1:])]
+    for alternative in ALTERNATIVES:
+        after = max(order.index(key) for key in alternative.ways[0].keys)
+        stand_ins = [key for way in alternative.ways[1:] for key in way.keys]
+        order[after + 1 : after + 1] = stand_ins
+    alternative_of = {key: alternative.name for alternative in ALTERNATIVES for key in alternative.keys}
 
     units.update(DERIVED_INPUT_UNITS)
 
@@ -422,21 +583,40 @@ def _build_slots() -> tuple[Slot, ...]:
             units=units[key],
             feeds=tuple(names),
             plausible=PLAUSIBLE_RANGES[key],
-            optional=key not in needed,
+            optional=key not in needed and key not in alternative_of,
+            alternative=alternative_of.get(key),
         )
-        for key, names in feeds.items()
+        for key, names in ((key, feeds[key]) for key in order)
     )
 
 
-#: The eight variables a publication maps. Fixed, and defined here only.
+#: The ten variables a publication maps — wind two ways. Fixed, and defined here only.
 SLOTS = _build_slots()
 
 BY_SLOT = {slot.key: slot for slot in SLOTS}
 
 SLOT_KEYS = tuple(slot.key for slot in SLOTS)
 
-#: The slots a publication cannot publish without. The rest may be left blank.
-REQUIRED_SLOT_KEYS = tuple(slot.key for slot in SLOTS if not slot.optional)
+#: The slots a publication cannot publish without, each on its own. The rest
+#: are optional, or one way of giving an :data:`ALTERNATIVES` quantity, which is
+#: required as a whole — see :func:`unresolved_alternatives`.
+REQUIRED_SLOT_KEYS = tuple(slot.key for slot in SLOTS if slot.required)
+
+
+def required_for(filled) -> tuple[str, ...]:
+    """The slots a publication with these filled must have, in vocabulary order.
+
+    The required slots, and for each alternative the way it is closest to
+    giving — the one with most slots filled, the first on a tie. What the
+    readiness count is out of: a publication giving wind either way reads as
+    complete against the same number.
+    """
+    filled = set(filled)
+    keys = set(REQUIRED_SLOT_KEYS)
+    for alternative in ALTERNATIVES:
+        way = max(alternative.ways, key=lambda way: sum(key in filled for key in way.keys))
+        keys.update(way.keys)
+    return tuple(key for key in SLOT_KEYS if key in keys)
 
 
 def parameters_for(filled) -> list[Parameter]:
@@ -444,10 +624,19 @@ def parameters_for(filled) -> list[Parameter]:
 
     Everything, less the optional series whose slot is blank. A required slot
     is never blank here — the planner refuses that first — so what drops out is
-    only ever an optional one.
+    only ever an optional one. A source a publication gives through other slots
+    (wind through its components, :data:`SOURCE_DERIVATIONS`) is filled.
     """
     filled = set(filled)
-    return [parameter for parameter in ALL_PARAMETERS if not parameter.source or parameter.source in filled]
+    return [parameter for parameter in ALL_PARAMETERS if not parameter.source or _given(parameter.source, filled)]
+
+
+def _given(source: str, filled: set) -> bool:
+    """Whether a source is filled, or derivable from slots that are."""
+    if source in filled:
+        return True
+    derivation = SOURCE_DERIVATIONS.get(source)
+    return derivation is not None and set(derivation[1]) <= filled
 
 
 #: For the model field. A literal list rather than the tuple above, because

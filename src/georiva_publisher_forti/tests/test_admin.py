@@ -34,11 +34,11 @@ from django.urls import reverse
 
 from georiva.core.models import Unit, Variable
 from georiva.organisations.testing import dial_org
-from georiva_publisher_forti import forms
+from georiva_publisher_forti import forms, readiness
 from georiva_publisher_forti import parameters as params
 from georiva_publisher_forti.models import NOT_A_FORECAST, FortiPublication
 
-from .factories import make_collection, make_publication, make_user, restate_source_unit
+from .factories import add_wind_components, make_collection, make_publication, make_user, restate_source_unit
 
 ADD_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:add"
 EDIT_URL = "wagtailsnippets_georiva_publisher_forti_fortipublication:edit"
@@ -215,6 +215,41 @@ class MappingRenderTests(MappingEditorMixin, TestCase):
 
         self.assertNotContains(response, 'class="fm-incomplete"')
         self.assertContains(response, "optional")
+
+    def test_an_incomplete_wind_is_said_as_readiness_says_it(self):
+        """The mapping page and the readiness row name the same gap in the same words."""
+        self.publication.variable_mappings.filter(slot="wind_dir_10m").update(variable=None)
+
+        response = self.client.get(self.url)
+
+        slots = next(finding for finding in readiness.report(self.publication).findings if finding.key == "slots")
+        (gap,) = response.context["form"].mapping_gaps()
+        self.assertIn(gap.message, slots.detail)
+        self.assertContains(response, gap.message)
+
+    def test_a_posted_mix_is_said_on_the_page_it_was_posted_from(self):
+        add_wind_components(self.collection)
+
+        response = self.remap("10u", self.variable("10u"), **{forms.field_name("wind_dir_10m"): ""})
+
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get(self.url)
+        (gap,) = response.context["form"].mapping_gaps()
+        self.assertIn("mixes", gap.message)
+
+    def test_the_missing_half_of_a_wind_pair_is_shown_as_incomplete(self):
+        self.publication.variable_mappings.filter(slot="wind_dir_10m").update(variable=None)
+
+        rows = {row.slot.key: row for row in self.client.get(self.url).context["rows"]}
+
+        self.assertTrue(rows["wind_dir_10m"].incomplete)
+        self.assertFalse(rows["10u"].incomplete)
+
+    def test_the_unused_way_of_giving_wind_is_not_shown_as_incomplete(self):
+        rows = {row.slot.key: row for row in self.client.get(self.url).context["rows"]}
+
+        self.assertFalse(rows["10u"].incomplete)
+        self.assertFalse(rows["10v"].incomplete)
 
     def test_a_fully_mapped_publication_is_not_shown_as_incomplete(self):
         self.assertNotContains(self.client.get(self.url), forms.INCOMPLETE_LABEL)

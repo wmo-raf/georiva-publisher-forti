@@ -15,6 +15,10 @@ game.
 
 import numpy as np
 
+# Wind from its components is core's, so a direction core computed at ingestion
+# and one computed here from a store's u and v agree, calm included (180°).
+from georiva.geoprocessing import wind_from_direction, wind_speed  # noqa: F401
+
 #: Below this, an accumulation that goes backwards is packing noise rather than a
 #: variable that is not an accumulation at all. In mm.
 #:

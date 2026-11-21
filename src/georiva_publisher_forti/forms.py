@@ -2,7 +2,7 @@
 
 :class:`FortiPublicationForm` is the snippet's own: which collection, what the
 model is called, who may ask for it, how far it reaches. :class:`VariableMappingForm`
-is the eight slots, on a page of their own. They were one form once, and the split
+is the slots, on a page of their own. They were one form once, and the split
 is the reason there are two: the slots choose between the variables of *this
 publication's* collection, and a form that is also choosing the collection is
 asking a question it cannot yet answer. On its own page the collection is already
@@ -31,7 +31,7 @@ is the reason :data:`CHECKS_NOT_MADE` is rendered rather than merely true.
 
 ## Why the fields are built rather than written out
 
-Eight ``ModelChoiceField``s typed into a class body would be the slot vocabulary
+A ``ModelChoiceField`` per slot typed into a class body would be the slot vocabulary
 restated in a second place, and ``parameters.py`` goes to some trouble to derive
 that vocabulary from the parameter map precisely so there is no second place. A
 slot key is also not a Python identifier — ``2t`` — so the names have to be
@@ -40,7 +40,7 @@ with the fields it produces.
 
 ## Why creating a publication asks for no mapping
 
-:meth:`~.models.FortiPublication.seed_mapping` fills all eight rows by slug
+:meth:`~.models.FortiPublication.seed_mapping` fills every row by slug
 auto-match at creation, and the operator is taken to the mapping page to read
 what it found. So the common case still asks for no decisions at all, and the
 case auto-match cannot answer is answered on the page that knows which
@@ -138,7 +138,7 @@ class SlotChoiceField(forms.ModelChoiceField):
     """A chooser over one collection's variables, named the way a slot is.
 
     ``Variable.__str__`` is ``collection:slug``, which is right everywhere a
-    variable can come from any collection and is noise in eight dropdowns that
+    variable can come from any collection and is noise in a dropdown per slot that
     all offer the same one. What an operator is matching against is the slug —
     it is what auto-match tried and what the slot is named after — so the slug
     leads, and the variable's own name follows it when it says anything the slug
@@ -157,11 +157,18 @@ class Row:
     slot: params.Slot
     field: forms.BoundField
     concerns: tuple[mapping.Concern, ...]
+    #: Whether a gap in the quantity this slot is one way of giving (wind)
+    #: names this row as not set.
+    named_by_a_gap: bool = False
 
     @property
     def incomplete(self) -> bool:
-        # An optional slot left blank is a choice, not a gap.
-        return not self.field.value() and not self.slot.optional
+        # A required slot is incomplete blank. Any other is incomplete only when
+        # a gap names it: an optional slot left blank is a choice, and the
+        # unused way of giving wind is blank on purpose.
+        if self.slot.required:
+            return not self.field.value()
+        return self.named_by_a_gap
 
 
 @dataclass(frozen=True)
@@ -253,7 +260,7 @@ class FortiPublicationForm(WagtailAdminModelForm):
 
         The rows name variables of the collection they were filled from, and the
         model refuses a variable belonging to another — so a re-pointed
-        publication holds eight rows that cannot be saved and cannot publish. It
+        publication holds rows that cannot be saved and cannot publish. It
         was reachable before this form existed and invisible until the next run;
         it is refused here because this is the first surface that has both facts
         in hand at once.
@@ -282,7 +289,7 @@ class FortiPublicationForm(WagtailAdminModelForm):
 
 
 class VariableMappingFormBase(forms.Form):
-    """The eight slots of one publication, and nothing else.
+    """The slots of one publication, and nothing else.
 
     A plain form over a publication rather than a model form: what it writes
     is the related rows, and the publication itself is only read. On a form
@@ -296,6 +303,7 @@ class VariableMappingFormBase(forms.Form):
         super().__init__(*args, **kwargs)
         self.publication = publication
         self._concerns = None
+        self._gaps = None
         #: Whether this submit moves a slot. False until :meth:`clean` says
         #: otherwise, which is also the right answer for a form nobody has
         #: submitted: reading a warned mapping is not changing it.
@@ -306,7 +314,7 @@ class VariableMappingFormBase(forms.Form):
         for slot in params.SLOTS:
             field = self.fields[field_name(slot.key)]
             # The collection's own variables and no others, which is also the
-            # model's refusal: a publication reads the COGs of its own
+            # model's refusal: a publication reads the assets of its own
             # collection, so a variable from another has no asset at any step.
             field.queryset = variables
             # Rendered by the page as the row's "Published as" cell, under the
@@ -375,14 +383,29 @@ class VariableMappingFormBase(forms.Form):
         a distinction nobody tests.
         """
         raised = self.mapping_concerns()
+        missing = {key for gap in self.mapping_gaps() for key in gap.missing}
         return tuple(
             Row(
                 slot=slot,
                 field=self[field_name(slot.key)],
                 concerns=tuple(concern for concern in raised if concern.slot == slot.key),
+                named_by_a_gap=slot.key in missing,
             )
             for slot in params.SLOTS
         )
+
+    def mapping_gaps(self) -> tuple[params.Gap, ...]:
+        """What stops wind resolving, as the mapping currently stands.
+
+        The same :class:`~.parameters.Gap` the readiness row and the planner's
+        refusal say, so the three cannot word one gap three ways. Shown, not
+        enforced: like a blank slot, an incomplete wind is legal to save and
+        reads as not ready. On a bound form it is the *posted* mapping, as
+        :meth:`mapping_concerns` is.
+        """
+        if self._gaps is None:
+            self._gaps = self.publication.unresolved_alternatives()
+        return self._gaps
 
     def mapping_concerns(self) -> tuple[mapping.Concern, ...]:
         """The warnings about the mapping as it currently stands.
@@ -427,6 +450,7 @@ class VariableMappingFormBase(forms.Form):
             posted[slot.key] = variable
 
         self._concerns = mapping.concerns(posted)
+        self._gaps = self.publication.unresolved_alternatives(posted)
         self._remapping = self._moves_a_slot(posted)
         if self.acknowledgement is not None and not cleaned.get(ACKNOWLEDGE_FIELD):
             self.add_error(ACKNOWLEDGE_FIELD, ACKNOWLEDGEMENT_REQUIRED)
@@ -471,7 +495,7 @@ class VariableMappingFormBase(forms.Form):
     # -- writing -------------------------------------------------------------
 
     def save(self) -> None:
-        """Write all eight rows; the model decides which of them changed.
+        """Write every row; the model decides which of them changed.
 
         It reads what the row held from the database rather than from memory,
         so it is the only thing here in a position to know; a comparison in
@@ -490,7 +514,7 @@ def _pk(variable):
 
 
 def _mapping_fields() -> dict:
-    """The eight choosers and the tick-box, keyed by field name.
+    """A chooser per slot and the tick-box, keyed by field name.
 
     Built from :data:`~.parameters.SLOTS` so that a parameter added with a new
     source becomes an editable slot in the same commit that adds it — the same

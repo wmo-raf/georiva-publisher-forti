@@ -5,7 +5,7 @@ match hidden inside the planner, so a collection that named its variables
 anything else could not publish at all and the only way to find out was to
 publish and read the refusal. It is data now: one row per slot.
 
-Three things are worth testing without a database. The **vocabulary** — eight
+Three things are worth testing without a database. The **vocabulary** — its
 slots, derived from the parameter map rather than typed out again beside it, so
 a parameter added with a new source cannot leave a slot nobody can fill. The
 **auto-match**, which is the old hard-coded rule kept as a default: a migration
@@ -16,6 +16,11 @@ is nonetheless legal — and whose honesty matters more than their coverage, sin
 the confusion that matters is the one neither of them can see.
 """
 
+import importlib
+import importlib.util
+from pathlib import Path
+
+from django.apps import apps as django_apps
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import RestrictedError
 from django.db.utils import IntegrityError
@@ -26,7 +31,7 @@ from georiva_publisher_forti import parameters as params
 from georiva_publisher_forti.mapping import RANGE, SHARED, auto_match, concerns, fillable
 from georiva_publisher_forti.models import FortiPublication, FortiVariableMapping
 
-from .factories import make_collection, make_publication, restate_source_unit
+from .factories import add_wind_components, make_collection, make_publication, restate_source_unit
 
 
 class Named:
@@ -40,10 +45,32 @@ class Named:
 
 
 class SlotVocabularyTests(SimpleTestCase):
-    def test_there_are_eight_slots(self):
-        """Seven source-backed parameters plus ``tp``, which only derivations
-        read. The other eight parameters are derived and have no source to map."""
-        self.assertEqual(len(params.SLOTS), 8)
+    def test_there_are_ten_slots(self):
+        """Seven source-backed parameters, ``tp``, which only derivations read,
+        and the two wind components that stand in for speed and direction. The
+        other eight parameters are derived and have no source to map."""
+        self.assertEqual(len(params.SLOTS), 10)
+
+    def test_the_wind_components_are_slots_read_in_metres_per_second(self):
+        for key in ("10u", "10v"):
+            with self.subTest(key=key):
+                slot = params.BY_SLOT[key]
+                self.assertEqual(slot.units, "m/s")
+                self.assertEqual(slot.plausible, (-120.0, 120.0))
+                self.assertEqual(slot.feeds, ("wind_speed_10m", "wind_from_direction_10m"))
+
+    def test_the_wind_components_follow_the_slots_they_stand_in_for(self):
+        keys = list(params.SLOT_KEYS)
+
+        self.assertEqual(keys[keys.index("wind_dir_10m") + 1 : keys.index("wind_dir_10m") + 3], ["10u", "10v"])
+
+    def test_no_wind_slot_is_required_on_its_own(self):
+        """Wind is required as one complete pair, either pair: no single wind
+        slot is required, and none is optional either."""
+        for key in ("wind_speed_10m", "wind_dir_10m", "10u", "10v"):
+            with self.subTest(key=key):
+                self.assertNotIn(key, params.REQUIRED_SLOT_KEYS)
+                self.assertFalse(params.BY_SLOT[key].optional)
 
     def test_every_slot_a_parameter_reads_directly_is_in_the_vocabulary(self):
         direct = {parameter.source for parameter in params.ALL_PARAMETERS if parameter.source}
@@ -90,14 +117,118 @@ class SlotVocabularyTests(SimpleTestCase):
         self.assertTrue(all(low < high for low, high in (slot.plausible for slot in params.SLOTS)))
 
 
+WIND_COMPONENTS = ("10u", "10v")
+
+#: Every slot but the wind components: what a collection holding speed and
+#: direction fills.
+WITH_SPEED_AND_DIRECTION = tuple(key for key in params.SLOT_KEYS if key not in WIND_COMPONENTS)
+
+
+class WindAlternativeTests(SimpleTestCase):
+    """Wind is given one of two complete ways: speed and direction, or u and v.
+
+    Asked of slot keys alone, because it is the one rule the planner refuses
+    with, the readiness page reports and the mapping page shows — and three
+    surfaces saying the same thing is what one function makes possible.
+    """
+
+    def gaps(self, *filled):
+        return params.unresolved_alternatives(filled)
+
+    def test_speed_and_direction_resolve_wind(self):
+        self.assertEqual(self.gaps("wind_speed_10m", "wind_dir_10m"), ())
+
+    def test_u_and_v_resolve_wind(self):
+        self.assertEqual(self.gaps("10u", "10v"), ())
+
+    def test_nothing_set_names_both_ways(self):
+        (gap,) = self.gaps("2t")
+
+        self.assertIn("wind_speed_10m and wind_dir_10m", gap.message)
+        self.assertIn("10u and 10v", gap.message)
+        self.assertEqual(set(gap.missing), {"wind_speed_10m", "wind_dir_10m", "10u", "10v"})
+
+    def test_speed_without_direction_names_direction(self):
+        (gap,) = self.gaps("wind_speed_10m")
+
+        self.assertEqual(gap.missing, ("wind_dir_10m",))
+        self.assertIn("wind_dir_10m is not set", gap.message)
+
+    def test_u_without_v_names_v(self):
+        (gap,) = self.gaps("10u")
+
+        self.assertEqual(gap.missing, ("10v",))
+        self.assertIn("10v is not set", gap.message)
+
+    def test_a_mix_of_the_two_ways_names_what_each_way_is_missing(self):
+        (gap,) = self.gaps("wind_speed_10m", "10v")
+
+        self.assertIn("wind_dir_10m", gap.message)
+        self.assertIn("10u", gap.message)
+        self.assertIn("mixes", gap.message)
+
+    def test_both_ways_complete_is_a_mix_too(self):
+        """Two answers to one question: which one is published is not this
+        rule's to guess."""
+        (gap,) = self.gaps("wind_speed_10m", "wind_dir_10m", "10u", "10v")
+
+        self.assertIn("mixes", gap.message)
+
+    def test_components_stand_in_for_the_wind_parameters(self):
+        """A publication with u and v publishes wind speed and direction."""
+        names = {parameter.name for parameter in params.parameters_for(["10u", "10v"])}
+
+        self.assertIn("wind_speed_10m", names)
+        self.assertIn("wind_from_direction_10m", names)
+
+    def test_one_component_stands_in_for_nothing(self):
+        names = {parameter.name for parameter in params.parameters_for(["10u"])}
+
+        self.assertNotIn("wind_speed_10m", names)
+
+
 class AutoMatchTests(SimpleTestCase):
     def test_a_conventionally_named_collection_fills_every_slot(self):
-        variables = [Named(key) for key in params.SLOT_KEYS]
+        variables = [Named(key) for key in WITH_SPEED_AND_DIRECTION]
 
         matched = auto_match(variables)
 
         self.assertEqual(set(matched), set(params.SLOT_KEYS))
-        self.assertTrue(all(matched[key].slug == key for key in params.SLOT_KEYS))
+        self.assertTrue(all(matched[key].slug == key for key in WITH_SPEED_AND_DIRECTION))
+
+    def test_components_are_matched_when_speed_and_direction_are_not_found(self):
+        variables = [Named(key) for key in params.SLOT_KEYS if key not in ("wind_speed_10m", "wind_dir_10m")]
+
+        matched = auto_match(variables)
+
+        self.assertEqual(matched["10u"].slug, "10u")
+        self.assertEqual(matched["10v"].slug, "10v")
+        self.assertIsNone(matched["wind_speed_10m"])
+
+    def test_components_are_not_matched_beside_speed_and_direction(self):
+        """A collection holding all four (an ingested one: core computed speed
+        and direction from the components) keeps reading speed and direction."""
+        matched = auto_match([Named(key) for key in params.SLOT_KEYS])
+
+        self.assertEqual(matched["wind_speed_10m"].slug, "wind_speed_10m")
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
+
+    def test_components_are_not_matched_beside_speed_alone(self):
+        matched = auto_match([Named("wind_speed_10m"), Named("10u"), Named("10v")])
+
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
+
+    def test_components_are_not_matched_beside_a_wind_slot_already_set(self):
+        """An operator's own speed variable, under another name, is a decision:
+        matching the components beside it would make a mix."""
+        mapped = {"wind_speed_10m": Named("ws"), "wind_dir_10m": None}
+
+        matched = auto_match([Named("10u"), Named("10v")], mapped=mapped)
+
+        self.assertIsNone(matched["10u"])
+        self.assertIsNone(matched["10v"])
 
     def test_an_unrecognised_name_leaves_its_slot_blank(self):
         """Blank rather than absent: the slot exists whether or not anything
@@ -153,7 +284,18 @@ class FillableTests(SimpleTestCase):
         keys = list(reversed(params.SLOT_KEYS))
         offered = fillable(self.blank(*keys), [Named(key) for key in keys])
 
-        self.assertEqual(list(offered), list(params.SLOT_KEYS))
+        self.assertEqual(list(offered), list(WITH_SPEED_AND_DIRECTION))
+
+    def test_components_are_offered_for_blank_wind_when_the_collection_has_only_components(self):
+        offered = fillable(self.blank("wind_speed_10m", "wind_dir_10m", "10u", "10v"), [Named("10u"), Named("10v")])
+
+        self.assertEqual(list(offered), ["10u", "10v"])
+
+    def test_components_are_not_offered_beside_a_speed_already_set(self):
+        """Taking that offer would make a mix the planner refuses."""
+        offered = fillable(self.blank("wind_dir_10m", "10u", "10v"), [Named("10u"), Named("10v")])
+
+        self.assertEqual(offered, {})
 
 
 class Symbol:
@@ -274,7 +416,7 @@ class ConcernTests(SimpleTestCase):
 
 
 class SeedingTests(TestCase):
-    """A publication comes into the world with its eight slots already there.
+    """A publication comes into the world with its slots already there.
 
     Seeding by auto-match is what keeps the change invisible to every
     conventionally-named collection: the mapping a new publication starts with
@@ -306,7 +448,7 @@ class SeedingTests(TestCase):
         self.assertEqual(publication.unmapped_slots(), ["tcc"])
 
     def test_seeding_does_not_count_as_a_configuration_change(self):
-        """Eight rows appearing at creation is the publication being born, not
+        """A row per slot appearing at creation is the publication being born, not
         its bytes changing: a generation raised here would publish the first run
         under a stamp that says it is already a correction."""
         publication = make_publication(self.collection)
@@ -501,3 +643,60 @@ class ConfigurationChangeTests(TestCase):
         self.publication.refresh_from_db()
 
         self.assertEqual(self.publication.generation, before + 1)
+
+
+class ComponentSlotsMigrationTests(TestCase):
+    """0008 seeds the wind component rows of publications that predate them, by
+    its own frozen copy of the match: what it wrote must not change when the
+    live auto-match does."""
+
+    def seed(self):
+        migration = importlib.import_module("georiva_publisher_forti.migrations.0008_wind_component_slots")
+        migration.seed_component_rows(django_apps, None)
+
+    def publication_before_0008(self, collection):
+        publication = make_publication(collection)
+        publication.variable_mappings.filter(slot__in=("10u", "10v")).delete()
+        return publication
+
+    def components(self, publication):
+        rows = publication.variable_mappings.filter(slot__in=("10u", "10v")).select_related("variable")
+        return {row.slot: row.variable.slug if row.variable else None for row in rows}
+
+    def test_a_collection_with_only_components_gets_them_filled(self):
+        collection = add_wind_components(make_collection(), drop_speed_and_direction=True)
+        publication = self.publication_before_0008(collection)
+        publication.variable_mappings.filter(slot__in=("wind_speed_10m", "wind_dir_10m")).update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": "10u", "10v": "10v"})
+
+    def test_a_publication_reading_speed_and_direction_gets_blank_rows(self):
+        publication = self.publication_before_0008(add_wind_components(make_collection()))
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": None, "10v": None})
+
+    def test_a_collection_with_speed_and_direction_named_gets_blank_rows_even_if_unmapped(self):
+        publication = self.publication_before_0008(add_wind_components(make_collection()))
+        publication.variable_mappings.filter(slot__in=("wind_speed_10m", "wind_dir_10m")).update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": None, "10v": None})
+
+    def test_a_row_already_there_is_left_alone(self):
+        collection = add_wind_components(make_collection(), drop_speed_and_direction=True)
+        publication = make_publication(collection)
+        publication.variable_mappings.filter(slot="10v").update(variable=None)
+
+        self.seed()
+
+        self.assertEqual(self.components(publication), {"10u": "10u", "10v": None})
+
+    def test_it_does_not_import_the_live_auto_match(self):
+        source = Path(importlib.util.find_spec("georiva_publisher_forti.migrations.0008_wind_component_slots").origin)
+
+        self.assertNotIn("from georiva_publisher_forti", source.read_text())

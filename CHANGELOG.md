@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Publish from a harvested store
+
+A collection a store harvest made (core ADR 0044) publishes like an ingested
+one (#48). The planner asks core which assets have values —
+`georiva.core.values.readable`, a COG local or Remote, or a Store asset — instead
+of filtering on COGs, and readiness asks the same question, so its step count is
+the build's. A texture is never read as a slot's values. The "no timestep has a
+COG" refusal now says "has data".
+
+### Wind from u and v
+
+Wind can be mapped as speed and direction, as before, or as the 10 m `u` and
+`v` components (#49): a store harvest maps one array to one Variable and runs no
+vector extraction, so its collection holds the components only. Two new slots,
+`10u` and `10v` (m/s), feed `wind_speed_10m` and `wind_from_direction_10m`,
+which are then derived after the transpose — speed as the vector magnitude,
+direction by core's `georiva.geoprocessing.wind_from_direction`, the formula
+core's ingestion uses, so both routes publish the same number (calm included).
+
+A mapping must give wind exactly one complete way. Neither, half of one, or a
+slot of each is refused at the publish, reported by readiness, and shown on the
+mapping page with the same sentence; saving it is still allowed, like a blank
+slot. Auto-match fills the components only when neither speed nor direction is
+found, and never beside a way already held.
+
+**Migration 0008** adds the two slots to the field's choices and gives every
+existing publication a row for each: blank, unless the publication has no wind
+slot set and its collection holds `10u` and `10v` and neither speed nor
+direction. Generations are left alone.
+
+### Zero precipitation at the run's start
+
+`tp` is accumulated from the run's start, so it is zero at the run's reference
+time by definition (#50). A store that holds no step there (AIFS) used to lose
+the first window and the weather symbols built on it; the planner now supplies
+a zero field there, at the reference time only — a step missing anywhere else
+is still missing, never zero rain — and readiness counts it the same way.
+
+**Needs a core with `georiva.core.values.readable`, `georiva.harvest.testing.LocalStore`
+(tests) and `georiva.geoprocessing.wind_from_direction`** (wmo-raf/georiva#761).
+
 ### Values are read through core, converted to each parameter's unit
 
 The publisher reads every input through core's read module

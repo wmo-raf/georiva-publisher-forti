@@ -34,6 +34,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from georiva.core import values
 from georiva.core.models import Asset, Item
 from georiva.ingestion.models import RunIngestion
 
@@ -41,6 +42,7 @@ from . import parameters as params
 from . import units
 from .models import GENERATIONS_PER_REVISION
 from .prose import stamp
+from .reader import ZERO
 from .windows import publishable
 
 #: Why a collection nobody may read anonymously is not published, said once for
@@ -50,6 +52,11 @@ from .windows import publishable
 NOT_PUBLIC = (
     "{slug} is {visibility}. Only public collections can be published to Forti — change the collection's visibility."
 )
+
+#: Slots accumulated from the run's start, so zero at the run's reference time
+#: by definition. A store holds no step there (AIFS), and without one the first
+#: window — and the weather symbols built on it — would never be published.
+ACCUMULATED_FROM_RUN_START = ("tp",)
 
 
 class NothingToPublish(Exception):
@@ -80,6 +87,9 @@ class PublishPlan:
 
     mapping: dict = field(default_factory=dict)
     """``{slot key: variable id}`` — which variable was resolved into each slot."""
+
+    geometry_asset: object = None
+    """The asset the read fixes its window from: see :func:`geometry_asset`."""
 
     time_until_next: timedelta | None = None
 
@@ -151,11 +161,11 @@ def plan(publication) -> PublishPlan:
 
     by_slot = _resolve_slots(publication)
 
-    assets_by_slot = cog_assets(collection, run.reference_time, by_slot)
+    assets_by_slot = readable_assets(collection, run.reference_time, by_slot)
     times = shared_times(assets_by_slot)
     if not times:
         raise NothingToPublish(
-            f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has a COG "
+            f"{collection.slug} @ {stamp(run.reference_time)}: no timestep has data "
             f"for every variable. Variables of one run ingest independently, so this "
             f"resolves itself as the stragglers land."
         )
@@ -168,6 +178,7 @@ def plan(publication) -> PublishPlan:
             f"precipitation and no symbol."
         )
 
+    assets = {slot: [assets_by_slot[slot][time] for time in times] for slot in assets_by_slot}
     return PublishPlan(
         publication=publication,
         run=run,
@@ -176,8 +187,9 @@ def plan(publication) -> PublishPlan:
         generation=_generation_for(publication, run),
         times=times,
         parameters=chosen,
-        assets={slot: [assets_by_slot[slot][time] for time in times] for slot in assets_by_slot},
+        assets=assets,
         mapping={slot: variable.pk for slot, variable in by_slot.items()},
+        geometry_asset=geometry_asset(assets),
         time_until_next=_time_until_next(publication, collection, run),
     )
 
@@ -227,7 +239,7 @@ def readable_without_credentials(collection) -> bool:
 
     The reader is Forti's — ``rawdataforecaster`` and ``jsonfrontend`` serve
     what is published to anybody who can reach them — not the publisher's own
-    read of the COGs, which goes through core's read module with the worker's
+    read of the assets, which goes through core's read module with the worker's
     credentials. So the rule stands now that the publisher no longer reads a
     public-read bucket by URL: it is about who sees the output.
 
@@ -253,11 +265,13 @@ def _resolve_slots(publication) -> dict:
     mapping is seeded with *is* the old exact-slug match, so a conventionally
     named collection resolves to what it always resolved to; what has changed is
     that a collection naming its variables otherwise can now be published at all,
-    by an operator editing eight rows rather than by renaming variables the rest
+    by an operator editing its rows rather than by renaming variables the rest
     of the instance already uses.
 
     Three refusals, in the order an operator can act on them. A **blank slot** is
-    a configuration that is not finished — legal to save, impossible to publish.
+    a configuration that is not finished — legal to save, impossible to publish —
+    and so is **wind** given neither way completely, or both ways at once
+    (:func:`~.parameters.unresolved_alternatives`).
     A variable from **another collection** would have no asset at any timestep,
     and refusing here says so instead of letting the step intersection come back
     empty and blame the run. And a **unit that cannot be converted**: every slot
@@ -281,6 +295,9 @@ def _resolve_slots(publication) -> dict:
             f"the parameter map has to name a variable of {collection.slug} before this can "
             f"publish — fill the blank ones in on the publication."
         )
+    gaps = publication.unresolved_alternatives(by_slot)
+    if gaps:
+        raise PublicationRefused(f"{publication.slug} cannot publish yet. " + " ".join(gap.message for gap in gaps))
     # What is left blank is optional, and is not part of this publish.
     by_slot = {key: variable for key, variable in by_slot.items() if variable is not None}
 
@@ -290,7 +307,7 @@ def _resolve_slots(publication) -> dict:
     if foreign:
         raise PublicationRefused(
             f"{publication.slug} maps {', '.join(foreign)} from outside {collection.slug}. A "
-            f"publication reads its own collection's COGs, so those slots have no asset at "
+            f"publication reads its own collection's assets, so those slots have no asset at "
             f"any timestep. Remap them, or publish the collection they belong to."
         )
 
@@ -313,30 +330,41 @@ def _resolve_slots(publication) -> dict:
     return by_slot
 
 
-def cog_assets(collection, reference_time, by_slot) -> dict:
-    """``{slot key: {time: Asset}}`` for one run's COG assets.
+def readable_assets(collection, reference_time, by_slot) -> dict:
+    """``{slot key: {time: Asset}}`` for the assets of one run that have values.
+
+    Which assets those are is core's question, not this plugin's:
+    :func:`georiva.core.values.readable` answers it — a COG, local or Remote,
+    or a Store asset a store harvest made (ADR 0044) — and the read module that
+    answers it is the one that reads them (ADR 0046 §10). A texture is never
+    among them, so an encoded PNG of a variable is never a slot's values. An
+    ingested run and a harvested run are planned alike.
 
     Public because :mod:`~.readiness` asks the same question ahead of a publish
     rather than during one, and the step count it reports has to be the count
-    this produces. Two readings of "which COGs does this run have" is the
+    this produces. Two readings of "which assets does this run have" is the
     arrangement in which the form promises a number the build then disagrees
     with.
 
-    The rows, not their hrefs: core's read module reads an asset by its row —
-    wherever its bytes are, and in the unit asked of its Variable (ADR 0046 §10).
-    COGs only, for now; a Store asset (ADR 0044) is read the same way, but a
-    store harvest's steps are not yet planned here.
+    A slot accumulated from the run's start with no asset at the reference
+    time gets :data:`~.reader.ZERO` there, which is what it holds by
+    definition. Here, so the step set readiness counts includes it exactly as
+    the build's does; at the reference time only, so a step missing anywhere
+    else stays missing and is never read as zero rain. An asset that is there
+    is read as provided. The zero then takes part in the intersection like any
+    other step: an instant slot lacking the reference time still drops it.
 
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
     an instance that derives dew point and temperature from one field, say — in
     which case its assets belong to both.
     """
-    assets = Asset.objects.filter(
-        item__collection=collection,
-        item__reference_time=reference_time,
-        variable__in=set(by_slot.values()),
-        format=Asset.Format.COG,
+    assets = values.readable(
+        Asset.objects.filter(
+            item__collection=collection,
+            item__reference_time=reference_time,
+            variable__in=set(by_slot.values()),
+        )
     ).select_related("item")
 
     slots_by_variable = {}
@@ -347,6 +375,10 @@ def cog_assets(collection, reference_time, by_slot) -> dict:
     for asset in assets:
         for slot in slots_by_variable[asset.variable_id]:
             found[slot][asset.item.time] = asset
+
+    for slot in ACCUMULATED_FROM_RUN_START:
+        if slot in found:
+            found[slot].setdefault(reference_time, ZERO)
     return found
 
 
@@ -359,6 +391,24 @@ def spans_a_period(parameters) -> bool:
     written on both sides of the refusal.
     """
     return any(parameter.is_period for parameter in parameters)
+
+
+def geometry_asset(assets) -> object:
+    """The asset a publish fixes its window from, out of ``{slot: [asset per step]}``.
+
+    Taken from a slot that is not accumulated from the run's start: only such a
+    slot may hold a supplied :data:`~.reader.ZERO`, which has no geometry, so
+    every step of any other slot is an asset that was read. A publication maps
+    required instant slots, so one is always there; a plan without one is
+    refused here rather than failing inside the read.
+    """
+    for slot, steps in assets.items():
+        if slot not in ACCUMULATED_FROM_RUN_START and steps:
+            return steps[0]
+    raise NothingToPublish(
+        f"{', '.join(assets) or 'Nothing'} is accumulated from the run's start, which leaves "
+        f"no asset to fix the window from. Map a slot read at every step."
+    )
 
 
 def shared_times(assets_by_slot) -> list:

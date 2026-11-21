@@ -1,6 +1,6 @@
 {% load i18n %}
 {% comment %}
-    The eight slots, and the three things that can be said about one.
+    The slots, and the three things that can be said about one.
 
     Every distinction on this page was drawn in `forms.py` and arrives here as a
     row: which parameters the slot feeds, whether anything fills it, what was
@@ -80,6 +80,13 @@
         display: inline-block;
         margin-top: 0.4em;
         font-size: 0.85em;
+        color: var(--w-color-grey-400);
+    }
+
+    /* A quantity not yet given one complete way (wind): unfinished, not wrong. */
+    .fm-gap {
+        margin: 0 0 1em;
+        max-width: 48em;
         color: var(--w-color-grey-400);
     }
 
@@ -168,8 +175,17 @@
     {% blocktrans trimmed %}
         Choose which variable of the collection to publish as each Forti parameter. Rows were
         pre-filled where the names matched. Publishing waits until every row not marked optional is set.
+        Wind is set one way: speed and direction, or its u and v components — not some of each.
     {% endblocktrans %}
 </p>
+
+{% comment %}
+    What stops wind resolving, in the sentence the readiness row and the
+    planner's refusal use. Shown, not enforced: like a blank row, it saves.
+{% endcomment %}
+{% for gap in gaps %}
+    <p class="fm-gap">{{ gap.message }}</p>
+{% endfor %}
 
 {% comment %}
     The slug match, offered and not applied. Rendered only when it would fill

@@ -17,13 +17,15 @@ machine check will ever catch it. A surface that renders these without saying so
 has told an operator their mapping was verified. It was not.
 
 Kept in a module of its own, pure, and importing no models — only core's unit
-rule, which is pint — because a data migration imports it. A migration that reached into ``models`` would
-rewrite its own history the next time a model changed; one that duplicated the
-rule would describe the bytes a publication is serving using a rule that is no
-longer the one that produced them. :func:`concerns` is written to the same
-constraint for a different reason: it is a judgment about eight names and eight
-number pairs, and a function that needed a database to make it could not be
-tested without one.
+rule, which is pint — because migration 0005 imports it. A migration that
+reached into ``models`` would rewrite its own history the next time a model
+changed; 0005 imports the rule rather than copying it because its rows describe
+the bytes then being served, by the rule that produced them. Migration 0008,
+which seeds rows nobody has published from yet, keeps a frozen copy instead, so
+a later change here cannot change what it wrote. :func:`concerns` is written to
+the same constraint for a different reason: it is a judgment about a handful of
+names and number pairs, and a function that needed a database to make it could
+not be tested without one.
 """
 
 from dataclasses import dataclass
@@ -54,7 +56,7 @@ class Concern:
     message: str
 
 
-def auto_match(variables) -> dict:
+def auto_match(variables, mapped: dict | None = None) -> dict:
     """``{slot key: variable or None}`` — every slot answered, by slug.
 
     Takes anything with a ``.slug``, so a historical model in a migration and a
@@ -62,9 +64,29 @@ def auto_match(variables) -> dict:
     a variable fills it: a blank slot is a thing a publication *has*, and being
     asked to fill one in is how a collection that names its variables
     differently becomes publishable at all.
+
+    A quantity given one way out of several (:data:`~.parameters.ALTERNATIVES`)
+    is matched one way only: the first way any of whose slugs is found, so the
+    wind components are matched only when neither speed nor direction is. And
+    ``mapped`` — what a publication already holds — wins over the match: a way
+    with a slot already filled is the way, whatever it is called, and matching
+    another beside it would make a mix the planner refuses.
     """
     by_slug = {variable.slug: variable for variable in variables}
-    return {key: by_slug.get(key) for key in params.SLOT_KEYS}
+    matched = {key: by_slug.get(key) for key in params.SLOT_KEYS}
+    mapped = mapped or {}
+    for alternative in params.ALTERNATIVES:
+        chosen = next(
+            (way for way in alternative.ways if any(mapped.get(key) is not None for key in way.keys)),
+            None,
+        ) or next(
+            (way for way in alternative.ways if any(matched[key] is not None for key in way.keys)),
+            None,
+        )
+        for way in alternative.ways:
+            if way is not chosen:
+                matched.update(dict.fromkeys(way.keys))
+    return matched
 
 
 def fillable(mapped: dict, variables) -> dict:
@@ -83,7 +105,7 @@ def fillable(mapped: dict, variables) -> dict:
     By slug alone, like the rule it reuses. Whether a match is in the slot's unit
     is the model's question, and the form asks it before offering.
     """
-    matched = auto_match(variables)
+    matched = auto_match(variables, mapped=mapped)
     return {key: matched[key] for key in params.SLOT_KEYS if mapped.get(key) is None and matched[key] is not None}
 
 
