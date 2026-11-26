@@ -53,11 +53,6 @@ NOT_PUBLIC = (
     "{slug} is {visibility}. Only public collections can be published to Forti — change the collection's visibility."
 )
 
-#: Slots accumulated from the run's start, so zero at the run's reference time
-#: by definition. A store holds no step there (AIFS), and without one the first
-#: window — and the weather symbols built on it — would never be published.
-ACCUMULATED_FROM_RUN_START = ("tp",)
-
 
 class NothingToPublish(Exception):
     """The run cannot be published, and no amount of retrying changes that.
@@ -346,13 +341,17 @@ def readable_assets(collection, reference_time, by_slot) -> dict:
     arrangement in which the form promises a number the build then disagrees
     with.
 
-    A slot accumulated from the run's start with no asset at the reference
-    time gets :data:`~.reader.ZERO` there, which is what it holds by
-    definition. Here, so the step set readiness counts includes it exactly as
-    the build's does; at the reference time only, so a step missing anywhere
-    else stays missing and is never read as zero rain. An asset that is there
-    is read as provided. The zero then takes part in the intersection like any
-    other step: an instant slot lacking the reference time still drops it.
+    A slot whose Variable declares itself a running total since its run
+    started (``Variable.zero_at_run_start``, ADR 0051) gets
+    :data:`~.reader.ZERO` at the reference time when it has no asset there:
+    it is zero there by definition, and a non-instant Variable has no step
+    there to be written, so without it the first window — and the weather
+    symbols built on it — would never be published. Here, so the step set
+    readiness counts includes it exactly as the build's does; at the
+    reference time only, so a step missing anywhere else stays missing and is
+    never read as zero rain. An asset that is there is read as provided. The
+    zero then takes part in the intersection like any other step: an instant
+    slot lacking the reference time still drops it.
 
     Keyed by slot and gathered by variable **id**, not by slug: the slug is no
     longer the slot's name, and one variable may legitimately fill two slots —
@@ -376,8 +375,8 @@ def readable_assets(collection, reference_time, by_slot) -> dict:
         for slot in slots_by_variable[asset.variable_id]:
             found[slot][asset.item.time] = asset
 
-    for slot in ACCUMULATED_FROM_RUN_START:
-        if slot in found:
+    for slot, variable in by_slot.items():
+        if variable.zero_at_run_start:
             found[slot].setdefault(reference_time, ZERO)
     return found
 
@@ -396,14 +395,14 @@ def spans_a_period(parameters) -> bool:
 def geometry_asset(assets) -> object:
     """The asset a publish fixes its window from, out of ``{slot: [asset per step]}``.
 
-    Taken from a slot that is not accumulated from the run's start: only such a
-    slot may hold a supplied :data:`~.reader.ZERO`, which has no geometry, so
-    every step of any other slot is an asset that was read. A publication maps
-    required instant slots, so one is always there; a plan without one is
-    refused here rather than failing inside the read.
+    Taken from a slot whose first step is an asset that was read: a supplied
+    :data:`~.reader.ZERO` has no geometry, and is only ever a run's first step
+    (:func:`readable_assets`), so every step of such a slot is an asset. A
+    publication maps required instant slots, so one is always there; a plan
+    without one is refused here rather than failing inside the read.
     """
-    for slot, steps in assets.items():
-        if slot not in ACCUMULATED_FROM_RUN_START and steps:
+    for steps in assets.values():
+        if steps and steps[0] is not ZERO:
             return steps[0]
     raise NothingToPublish(
         f"{', '.join(assets) or 'Nothing'} is accumulated from the run's start, which leaves "

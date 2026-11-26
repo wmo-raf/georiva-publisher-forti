@@ -15,6 +15,7 @@ actually stage first.
 """
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -833,14 +834,25 @@ class StoreRunSignalTests(StorePublishTestCase):
 class PrecipitationStoreTestCase(StorePublishTestCase):
     """A store whose precipitation and temperature hold only the steps a test says."""
 
-    #: Precipitation steps the store does not hold, by step index. Accumulated
-    #: from the run's start, a store holds no step there (AIFS).
+    #: Precipitation steps the store does not hold, by step index.
     precipitation_not_held = (0,)
+    #: What the precipitation Variable declares of its time statistic (ADR 0051):
+    #: a running total since the run started, so zero at its start by definition.
+    precipitation_declared = ("sum", "run_start")
     #: Temperature steps the store does not hold, by step index.
     temperature_not_held = ()
     #: What precipitation starts from, and accumulates per step, in kg m⁻².
     offset = 0.0
     per_step = 1.5
+
+    def store_variables(self):
+        statistic, window = self.precipitation_declared
+        return {
+            **STORE_VARIABLES,
+            "precipitation_surface": replace(
+                STORE_VARIABLES["precipitation_surface"], time_statistic=statistic, statistic_window=window
+            ),
+        }
 
     def store_arrays(self):
         shape = (4, 8)
@@ -878,7 +890,8 @@ def _hours(*hours):
 
 
 class PrecipitationAtRunStartTests(PrecipitationStoreTestCase):
-    """No precipitation step at the run's start: Forti supplies the zero there."""
+    """A running total has no step at the run's start: Forti supplies the zero
+    there, because the Variable declares it one (ADR 0051)."""
 
     def test_the_first_six_hour_window_is_published_and_equals_the_accumulation_at_six_hours(self):
         self.close_run()
@@ -907,10 +920,40 @@ class PrecipitationAtRunStartTests(PrecipitationStoreTestCase):
         self.assertEqual(steps.answer, f"{result['steps']} steps")
 
 
-class PrecipitationHeldAtRunStartTests(PrecipitationStoreTestCase):
-    """A source that does hold the run's start is read as provided."""
+class ARunningTotalTheStoreHoldsAtRunStartTests(PrecipitationStoreTestCase):
+    """A store that holds a running total's start, as AIFS does, holds a field
+    of zeros there; it gets no row, and Forti supplies the zero (ADR 0051)."""
 
     precipitation_not_held = ()
+
+    def test_the_first_six_hour_window_is_published(self):
+        self.close_run()
+
+        publish(self.publication)
+
+        self.assertEqual(self.window_ends("precipitation_amount_acc6h"), _hours(6, 12, 18, 24))
+        self.assertAlmostEqual(self.first_value("precipitation_amount_acc6h"), 1.5, places=5)
+
+
+class UndeclaredPrecipitationMissingAtRunStartTests(PrecipitationStoreTestCase):
+    """A Variable that does not declare itself a running total is not given a
+    zero: its missing start drops the first window, as any slot's would."""
+
+    precipitation_declared = ("instant", "")
+
+    def test_the_first_window_is_dropped(self):
+        self.close_run()
+
+        planned = plan(self.reread())
+
+        self.assertEqual(self.leads(planned.times), _hours(6, 12, 18, 24))
+
+
+class PrecipitationHeldAtRunStartTests(PrecipitationStoreTestCase):
+    """An instant-declared Variable the source holds at the run's start is read as provided."""
+
+    precipitation_not_held = ()
+    precipitation_declared = ("instant", "")
     offset = 0.3
 
     def test_the_held_step_is_read_not_replaced_by_zero(self):

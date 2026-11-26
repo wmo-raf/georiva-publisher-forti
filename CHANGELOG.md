@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### The run's-start zero comes from the Variable's time statistic
+
+Which slot is zero at the run's reference time is no longer a hardcoded list
+(`ACCUMULATED_FROM_RUN_START = ("tp",)`, removed): a Variable that declares
+itself a running total since its run started (core ADR 0051:
+`time_statistic = sum`, `statistic_window = run_start`) gets the supplied zero,
+whatever slot it fills. Core writes no lead-0 step for such a Variable, so the
+zero is how its first window is published. A `tp` Variable still declared
+`instant` gets no zero: its lead-0 step is read where it exists, and its
+absence drops the first window as any slot's would. The window is fixed from
+any slot whose first step is an asset.
+
+**Needs a core with `Variable.zero_at_run_start`** (wmo-raf/georiva#818).
+
 ### Publish from a harvested store
 
 A collection a store harvest made (core ADR 0044) publishes like an ingested
