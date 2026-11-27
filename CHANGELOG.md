@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### The run's-start zero comes from the Variable's time statistic
 
